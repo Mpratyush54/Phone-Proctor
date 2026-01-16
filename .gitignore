@@ -1,0 +1,11 @@
+venv/Lib/site-packages
+venv/Scripts
+*/__pycache__
+*.pyc
+.DS_Store
+.ipynb_checkpoints
+.vscode
+.idea
+logs/
+venv/share/*\
+*.log
