@@ -11,7 +11,7 @@ class RuleEngine:
         # Thresholds (seconds)
         self.FACE_MISSING_THRESHOLD = 5
         self.MULTIPLE_FACES_THRESHOLD = 2
-        self.LOOK_AWAY_THRESHOLD = 1.5
+        self.LOOK_AWAY_THRESHOLD = 0.5
 
     def evaluate_faces(self, face_count):
         violations = []

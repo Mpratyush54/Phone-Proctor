@@ -1,0 +1,11 @@
+opencv-python
+mediapipe
+numpy
+scikit-learn
+torch
+torchaudio
+pyaudio
+psutil
+scapy
+pyqt5 
+pyqtwebengine

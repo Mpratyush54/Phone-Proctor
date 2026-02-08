@@ -1,20 +1,51 @@
+import json
 import os
+import cv2
+import uuid
 from datetime import datetime
 
 
 class EventLogger:
-    def __init__(self, log_file="logs/events.log"):
-        self.log_file = log_file
-        os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
+    def __init__(self, base_dir="data/dataset"):
+        self.session_id = str(uuid.uuid4())[:8]
+        self.base_dir = base_dir
+        self.session_dir = os.path.join(self.base_dir, self.session_id)
+        self.images_dir = os.path.join(self.session_dir, "images")
+        self.log_file = os.path.join(self.session_dir, "events.jsonl")
+        
+        os.makedirs(self.images_dir, exist_ok=True)
+        print(f"[DATA] Session ID: {self.session_id}. Logging to {self.session_dir}")
 
-    def log(self, event):
+    def log(self, event_type, details=None, frame=None):
         """
-        Log an event with timestamp.
+        Log a structured event.
+        :param event_type: str (e.g., "VIOLATION", "METRICS", "INFO")
+        :param details: dict or str (extra data)
+        :param frame: numpy array (optional) - saves image if provided
         """
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entry = f"{timestamp} | {event}\n"
+        timestamp = datetime.now().isoformat()
+        image_rel_path = None
+        
+        # Save Frame if provided
+        if frame is not None:
+            # Timestamp-based filename
+            filename = f"{int(datetime.now().timestamp() * 1000)}.jpg"
+            image_path = os.path.join(self.images_dir, filename)
+            cv2.imwrite(image_path, frame)
+            # Store relative path for portability
+            image_rel_path = os.path.join("images", filename)
+
+        record = {
+            "timestamp": timestamp,
+            "session_id": self.session_id,
+            "type": event_type,
+            "image_path": image_rel_path,
+            "data": details if details else {}
+        }
 
         with open(self.log_file, "a", encoding="utf-8") as f:
-            f.write(entry)
+            f.write(json.dumps(record) + "\n")
 
-        print(f"[LOG] {entry.strip()}")
+        # Console output for violations only to reduce noise
+        if event_type == "VIOLATION":
+            print(f"[LOG] {timestamp} | {details}")

@@ -9,3 +9,4 @@ venv/Scripts
 logs/
 venv/share/*\
 *.log
+data/*
