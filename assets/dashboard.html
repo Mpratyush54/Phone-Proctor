@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exam Environment Check</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --success: #16a34a;
+            --error: #dc2626;
+            --bg: #0f172a;
+            --card: #1e293b;
+            --text: #f8fafc;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Sidebar for Status */
+        .sidebar {
+            width: 300px;
+            background-color: var(--card);
+            padding: 2rem;
+            border-right: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            background: rgba(255, 255, 255, 0.05);
+            transition: all 0.3s ease;
+        }
+
+        .status-item.active {
+            border: 1px solid var(--primary);
+            background: rgba(37, 99, 235, 0.1);
+        }
+
+        .status-icon {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: #334155;
+        }
+
+        .status-item.success .status-icon {
+            background: var(--success);
+        }
+
+        .status-item.error .status-icon {
+            background: var(--error);
+        }
+
+        /* Main Content Area */
+        .main-content {
+            flex: 1;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Camera Feed Overlay */
+        #camera-container {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 320px;
+            height: 240px;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid var(--primary);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            z-index: 100;
+        }
+
+        #phone-container {
+            position: absolute;
+            bottom: 280px;
+            right: 20px;
+            width: 320px;
+            height: 240px;
+            background: #1e293b;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid #a78bfa;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            z-index: 99;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* 3D Gaze Visualization */
+        #gaze-container {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 280px;
+            height: 320px;
+            background: rgba(15, 23, 42, 0.92);
+            border-radius: 16px;
+            border: 1px solid #334155;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+            z-index: 101;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        #gaze-container .gaze-header {
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: #94a3b8;
+            padding: 10px 0 4px;
+        }
+
+        #gaze-canvas {
+            width: 260px;
+            height: 200px;
+        }
+
+        #gaze-data {
+            width: 100%;
+            padding: 6px 14px;
+            font-size: 0.7rem;
+            color: #94a3b8;
+            font-family: 'Courier New', monospace;
+            line-height: 1.5;
+        }
+
+        #gaze-data .val { color: #60a5fa; font-weight: bold; }
+        #gaze-data .warn { color: #f87171; font-weight: bold; }
+        #gaze-data .ok { color: #4ade80; font-weight: bold; }
+
+        #phone-container::after {
+            content: "Phone Feed";
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 0.8rem;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 2px 6px;
+            border-radius: 4px;
+            pointer-events: none;
+        }
+
+        #camera-feed,
+        #phone-feed {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* Exam Interface Mockup */
+        .exam-interface {
+            flex: 1;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            background: linear-gradient(to right, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .setup-card {
+            background: var(--card);
+            padding: 2rem;
+            border-radius: 1rem;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .step-indicator {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 2rem;
+        }
+
+        .step {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: #334155;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+
+        .step.active {
+            background: var(--primary);
+        }
+
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-top: 1rem;
+            width: 100%;
+        }
+
+        .btn:hover {
+            background: #1d4ed8;
+        }
+
+        .phone-connect-qr {
+            width: 200px;
+            height: 200px;
+            background: white;
+            margin: 1rem auto;
+            border-radius: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #000;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="sidebar">
+        <h3>System Status</h3>
+        <div class="status-item success">
+            <div class="status-icon">✓</div>
+            <div>
+                <strong>Webcam</strong>
+                <div style="font-size: 0.8rem; opacity: 0.7">Active & Monitoring</div>
+            </div>
+        </div>
+        <div class="status-item error" id="phone-status">
+            <div class="status-icon">!</div>
+            <div>
+                <strong>Phone Camera</strong>
+                <div style="font-size: 0.8rem; opacity: 0.7">Not Connected</div>
+            </div>
+        </div>
+        <div class="status-item active">
+            <div class="status-icon">⚡</div>
+            <div>
+                <strong>Network</strong>
+                <div style="font-size: 0.8rem; opacity: 0.7">Monitoring Traffic</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="exam-interface" id="setup-screen">
+            <div class="setup-card">
+                <div class="step-indicator">
+                    <div class="step active">1</div>
+                    <div class="step">2</div>
+                    <div class="step">3</div>
+                </div>
+
+                <h2>Connect Your Phone</h2>
+                <p style="opacity: 0.8; margin-bottom: 1.5rem">Open the <strong>Phone Proctor App</strong> and it will
+                    automatically connect via WiFi.</p>
+
+                <div class="phone-connect-qr">
+                    <!-- Placeholder for scan animation or status -->
+                    <div style="text-align: center">
+                        <div style="font-size: 2rem; margin-bottom: 0.5rem">📱</div>
+                        Waiting for connection...
+                    </div>
+                </div>
+
+                <div
+                    style="font-size: 0.9rem; margin-top: 1rem; padding: 0.5rem; background: rgba(255,255,255,0.05); border-radius: 4px;">
+                    IP: <span id="server-ip">Scanning...</span>
+                </div>
+
+                <button class="btn" onclick="nextStep()" style="display: none;" id="continue-btn">Continue to
+                    Exam</button>
+            </div>
+        </div>
+
+        <!-- 3D Gaze Visualization -->
+        <div id="gaze-container">
+            <div class="gaze-header">3D Head Tracking</div>
+            <canvas id="gaze-canvas" width="260" height="200"></canvas>
+            <div id="gaze-data">
+                Yaw: <span class="val" id="gd-yaw">0°</span> &nbsp;
+                Pitch: <span class="val" id="gd-pitch">0°</span><br>
+                Gaze: <span class="ok" id="gd-direction">CENTER</span><br>
+                Phone: <span class="val" id="gd-phone">--</span>
+            </div>
+        </div>
+
+        <!-- Camera Previews -->
+        <div id="phone-container" style="z-index: 9999;">
+            <img id="phone-feed" src="" alt="Waiting for Phone..."
+                style="width: 100%; height: 100%; object-fit: cover; background-color: #222;">
+        </div>
+        <div id="camera-container">
+            <img id="camera-feed" src="" alt="Webcam Feed">
+        </div>
+    </div>
+
+    <div id="exam-questions" style="display: none; width: 100%; height: 100%;">
+        <iframe src="https://en.wikipedia.org/wiki/Special:Random"
+            style="width: 100%; height: 100%; border: none;"></iframe>
+        <button onclick="endSession()"
+            style="position: fixed; top: 20px; right: 20px; z-index: 1000; background: #dc2626; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">End
+            Session</button>
+    </div>
+
+    <script>
+        let currentStep = 1;
+
+        function nextStep() {
+            if (currentStep === 1) {
+                // Move to Environment Check
+                currentStep = 2;
+                document.querySelector('h2').innerText = "Environment Check";
+                document.querySelector('h2').style.color = "white"; // Reset gradient if needed
+
+                const p = document.querySelector('p');
+                p.innerText = "Please look at the screen and ensure your room is lit. Analyzing environment...";
+                p.style.opacity = "1";
+
+                document.querySelector('.phone-connect-qr').style.display = 'none';
+                document.querySelector('.step-indicator .step:nth-child(2)').classList.add('active');
+
+                // Hide button briefly to simulate check
+                const btn = document.getElementById('continue-btn');
+                btn.style.display = 'none';
+                btn.innerText = "Start Exam";
+
+                // Simulate check
+                setTimeout(() => {
+                    p.innerHTML = "Environment <strong>Secure</strong>. You may proceed.";
+                    p.style.color = "#4ade80"; // green-400
+                    btn.style.display = 'block';
+                    btn.onclick = startExam;
+                }, 3000);
+            }
+        }
+
+        function startExam() {
+            currentStep = 3;
+            document.querySelector('.step-indicator .step:nth-child(3)').classList.add('active');
+
+            // Hide Setup
+            document.getElementById('setup-screen').style.display = 'none';
+            document.querySelector('.sidebar').style.display = 'none';
+
+            // Show Exam
+            const examDiv = document.getElementById('exam-questions');
+            examDiv.style.display = 'block';
+
+            // Enforce fullscreen coverage via JS since CSS was tricky
+            examDiv.style.position = 'fixed';
+            examDiv.style.top = '0';
+            examDiv.style.left = '0';
+            examDiv.style.width = '100vw';
+            examDiv.style.height = '100vh';
+            examDiv.style.zIndex = '10';
+            examDiv.style.background = '#fff';
+        }
+
+        function endSession() {
+            if (confirm("Are you sure you want to end the session and submit?")) {
+                // In a Qt WebEngine, window.close() might just close the view
+                // We can also try a specific signal if we had a QWebChannel
+                // But for now, window.close() is standard
+                document.body.innerHTML = "<h1 style='color:white; text-align:center; margin-top:20%'>Session Ended. Closing...</h1>";
+                setTimeout(() => {
+                    window.close();
+                }, 1000);
+            }
+        }
+
+        // ===== 3D HEAD VISUALIZATION ENGINE =====
+        const gazeCanvas = document.getElementById('gaze-canvas');
+        const gCtx = gazeCanvas ? gazeCanvas.getContext('2d') : null;
+        let targetYaw = 0, targetPitch = 0, currentYaw = 0, currentPitch = 0;
+        let gazeDir = 'CENTER', isViolation = false, phoneStatus = '--';
+
+        function lerp(a, b, t) { return a + (b - a) * t; }
+
+        function project3D(x, y, z, cx, cy, fov) {
+            const scale = fov / (fov + z);
+            return [cx + x * scale, cy - y * scale, scale];
+        }
+
+        function rotateY(x, y, z, angle) {
+            const rad = angle * Math.PI / 180;
+            return [x * Math.cos(rad) + z * Math.sin(rad), y, -x * Math.sin(rad) + z * Math.cos(rad)];
+        }
+
+        function rotateX(x, y, z, angle) {
+            const rad = angle * Math.PI / 180;
+            return [x, y * Math.cos(rad) - z * Math.sin(rad), y * Math.sin(rad) + z * Math.cos(rad)];
+        }
+
+        function drawHead() {
+            if (!gCtx) return;
+            const W = 260, H = 200;
+            const cx = W / 2, cy = H / 2 + 5;
+            const fov = 300;
+
+            // Smooth interpolation
+            currentYaw = lerp(currentYaw, targetYaw, 0.12);
+            currentPitch = lerp(currentPitch, targetPitch, 0.12);
+
+            gCtx.clearRect(0, 0, W, H);
+
+            // Background grid
+            gCtx.strokeStyle = 'rgba(51, 65, 85, 0.4)';
+            gCtx.lineWidth = 0.5;
+            for (let i = 0; i <= W; i += 20) {
+                gCtx.beginPath(); gCtx.moveTo(i, 0); gCtx.lineTo(i, H); gCtx.stroke();
+            }
+            for (let i = 0; i <= H; i += 20) {
+                gCtx.beginPath(); gCtx.moveTo(0, i); gCtx.lineTo(W, i); gCtx.stroke();
+            }
+
+            // Crosshair
+            gCtx.strokeStyle = 'rgba(148,163,184,0.3)';
+            gCtx.setLineDash([4, 4]);
+            gCtx.beginPath(); gCtx.moveTo(cx, 0); gCtx.lineTo(cx, H); gCtx.stroke();
+            gCtx.beginPath(); gCtx.moveTo(0, cy); gCtx.lineTo(W, cy); gCtx.stroke();
+            gCtx.setLineDash([]);
+
+            const yaw = currentYaw;
+            const pitch = currentPitch;
+
+            // Head ellipsoid vertices
+            function transformPt(x, y, z) {
+                let [rx, ry, rz] = rotateX(x, y, z, -pitch);
+                [rx, ry, rz] = rotateY(rx, ry, rz, yaw);
+                return project3D(rx, ry, rz, cx, cy, fov);
+            }
+
+            // Draw head outline (ellipse cross-sections)
+            const headW = 55, headH = 70, headD = 50;
+            const violation = isViolation;
+            const headColor = violation ? 'rgba(248,113,113,0.7)' : 'rgba(96,165,250,0.5)';
+            const headStroke = violation ? '#f87171' : '#60a5fa';
+
+            // Vertical slices
+            for (let slice = -2; slice <= 2; slice++) {
+                const sz = slice / 2;
+                gCtx.beginPath();
+                gCtx.strokeStyle = headStroke;
+                gCtx.lineWidth = slice === 0 ? 2 : 0.8;
+                gCtx.globalAlpha = slice === 0 ? 1 : 0.4;
+                for (let a = 0; a <= 360; a += 10) {
+                    const rad = a * Math.PI / 180;
+                    const px = headW * Math.cos(rad) * Math.cos(sz * 0.6);
+                    const py = headH * Math.sin(rad);
+                    const pz = headD * sz;
+                    const [sx, sy] = transformPt(px, py, pz);
+                    if (a === 0) gCtx.moveTo(sx, sy); else gCtx.lineTo(sx, sy);
+                }
+                gCtx.stroke();
+            }
+
+            // Horizontal slices
+            for (let slice = -1; slice <= 1; slice++) {
+                const sy2 = slice / 1.5;
+                gCtx.beginPath();
+                gCtx.strokeStyle = headStroke;
+                gCtx.lineWidth = 0.8;
+                gCtx.globalAlpha = 0.4;
+                for (let a = 0; a <= 360; a += 10) {
+                    const rad = a * Math.PI / 180;
+                    const px = headW * Math.cos(rad) * Math.cos(sy2 * 0.5);
+                    const py = headH * sy2;
+                    const pz = headD * Math.sin(rad) * Math.cos(sy2 * 0.5);
+                    const [sx, sy] = transformPt(px, py, pz);
+                    if (a === 0) gCtx.moveTo(sx, sy); else gCtx.lineTo(sx, sy);
+                }
+                gCtx.stroke();
+            }
+            gCtx.globalAlpha = 1;
+
+            // Nose (direction indicator)
+            const [nx, ny] = transformPt(0, 0, headD + 25);
+            const [nb, nby] = transformPt(0, 0, headD);
+            gCtx.beginPath();
+            gCtx.strokeStyle = violation ? '#ef4444' : '#22d3ee';
+            gCtx.lineWidth = 3;
+            gCtx.moveTo(nb, nby);
+            gCtx.lineTo(nx, ny);
+            gCtx.stroke();
+
+            // Nose tip dot
+            gCtx.beginPath();
+            gCtx.fillStyle = violation ? '#ef4444' : '#22d3ee';
+            gCtx.arc(nx, ny, 5, 0, Math.PI * 2);
+            gCtx.fill();
+
+            // Eyes
+            const eyeOff = 20;
+            const [lex, ley] = transformPt(-eyeOff, 12, headD * 0.7);
+            const [rex, rey] = transformPt(eyeOff, 12, headD * 0.7);
+            gCtx.fillStyle = 'rgba(255,255,255,0.9)';
+            gCtx.beginPath(); gCtx.arc(lex, ley, 6, 0, Math.PI * 2); gCtx.fill();
+            gCtx.beginPath(); gCtx.arc(rex, rey, 6, 0, Math.PI * 2); gCtx.fill();
+
+            // Pupils (shift based on gaze)
+            const pupilShift = Math.min(Math.abs(yaw), 30) / 30 * 3 * Math.sign(yaw);
+            const pupilShiftV = Math.min(Math.abs(pitch), 20) / 20 * 2 * Math.sign(-pitch);
+            gCtx.fillStyle = '#1e293b';
+            gCtx.beginPath(); gCtx.arc(lex + pupilShift, ley + pupilShiftV, 3, 0, Math.PI * 2); gCtx.fill();
+            gCtx.beginPath(); gCtx.arc(rex + pupilShift, rey + pupilShiftV, 3, 0, Math.PI * 2); gCtx.fill();
+
+            // Status indicator
+            gCtx.font = 'bold 11px Inter, sans-serif';
+            gCtx.textAlign = 'center';
+            if (violation) {
+                gCtx.fillStyle = '#f87171';
+                gCtx.fillText('⚠ VIOLATION', cx, H - 8);
+            } else {
+                gCtx.fillStyle = '#4ade80';
+                gCtx.fillText('✓ NORMAL', cx, H - 8);
+            }
+
+            // Update data readout
+            const yawEl = document.getElementById('gd-yaw');
+            const pitchEl = document.getElementById('gd-pitch');
+            const dirEl = document.getElementById('gd-direction');
+            const phoneEl = document.getElementById('gd-phone');
+            if (yawEl) yawEl.textContent = Math.round(currentYaw) + '°';
+            if (pitchEl) pitchEl.textContent = Math.round(currentPitch) + '°';
+            if (dirEl) {
+                dirEl.textContent = gazeDir;
+                dirEl.className = violation ? 'warn' : 'ok';
+            }
+            if (phoneEl) phoneEl.textContent = phoneStatus;
+
+            requestAnimationFrame(drawHead);
+        }
+
+        // Start render loop
+        if (gCtx) requestAnimationFrame(drawHead);
+
+        // Exposed to Python
+        window.updateGazeViz = function(yaw, pitch, direction, violation, phoneFaceDetected) {
+            targetYaw = yaw || 0;
+            targetPitch = pitch || 0;
+            gazeDir = direction || 'CENTER';
+            isViolation = !!violation;
+            phoneStatus = phoneFaceDetected ? '👤 Face visible' : '✓ Side view';
+        };
+
+        // Python Bridge
+        console.log("Dashboard JS Loaded");
+        window.updatePhoneStatus = function (connected, ip, logs, phoneVol, pcVol) {
+            const el = document.getElementById('phone-status');
+            const btn = document.getElementById('continue-btn');
+            const ipEl = document.getElementById('server-ip');
+
+            if (!el) {
+                console.warn("Element #phone-status not found");
+                return;
+            }
+
+            if (connected) {
+                el.classList.remove('error');
+                el.classList.add('success');
+                el.querySelector('.status-icon').innerText = '✓';
+                el.querySelector('div div').innerText = 'Connected: ' + ip;
+
+                if (phoneVol !== undefined) {
+                    el.querySelector('div div').innerText += ` | 🔊 Phone: ${phoneVol} / PC: ${pcVol}`;
+                }
+
+                const qrDiv = document.querySelector('.phone-connect-qr');
+                if (qrDiv) qrDiv.innerHTML = '<div style="color:green; font-weight:bold; font-size:1.2rem">✓ Connected</div>';
+
+                if (currentStep === 1) {
+                    btn.style.display = 'block';
+                }
+
+                ipEl.innerText = ip;
+            } else {
+                el.classList.add('error');
+                el.classList.remove('success');
+                el.querySelector('div div').innerText = 'Waiting...';
+            }
+
+            if (logs && logs.length > 0) {
+                console.log("ALERTS:", logs);
+                const title = document.querySelector('h1');
+                if (title) title.innerText = "⚠️ Alert: " + logs[logs.length - 1];
+            }
+        }
+    </script>
+</body>
+
+</html>

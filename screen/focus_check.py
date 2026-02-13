@@ -2,7 +2,7 @@ import ctypes
 from ctypes import wintypes
 
 class FocusMonitor:
-    def __init__(self, expected_window_name="AI Proctoring - Laptop"):
+    def __init__(self, expected_window_name="Secure Exam Environment"):
         self.expected_window_name = expected_window_name
         self.user32 = ctypes.windll.user32
         # Define return types for safety

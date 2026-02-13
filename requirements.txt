@@ -9,3 +9,9 @@ psutil
 scapy
 pyqt5 
 pyqtwebengine
+SpeechRecognition
+ultralytics
+websockets
+requests
+flask
+aiortc
