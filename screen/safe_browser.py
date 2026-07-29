@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import psutil
 
 # 🔥 CRITICAL: Enable WebRTC + Media + Secure Overrides
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
@@ -70,7 +71,16 @@ class SecurePage(QWebEnginePage):
             print("[PERMISSION] Denied")
 
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
-        print(f"[JS] {message} (Line {lineNumber})")
+        print(f"[JS] {message}")
+        if message.startswith("CMD:KILL:"):
+            try:
+                pid_str = message.split(":")[2]
+                pid = int(pid_str)
+                proc = psutil.Process(pid)
+                proc.terminate()
+                print(f"[PY] Terminated process {pid}")
+            except Exception as e:
+                print(f"[PY] Failed to terminate {pid_str}: {e}")
 
     def acceptNavigationRequest(self, url, _type, isMainFrame):
         host = url.host()
@@ -164,12 +174,13 @@ class SafeBrowser(QMainWindow):
     # ==========================
     # JS Injection Methods
     # ==========================
-    def update_phone_status(self, connected, ip, logs=[], phoneVol=0.0, pcVol=0.0):
+    def update_phone_status(self, connected, ip, logs=[], phoneVol=0.0, pcVol=0.0, blockingApps=[]):
         if not self.is_loaded:
             return
 
         ip_str = str(ip) if ip else "N/A"
         logs_json = json.dumps(logs)
+        apps_json = json.dumps(blockingApps)
 
         js = f"""
         if(window.updatePhoneStatus)
@@ -178,7 +189,8 @@ class SafeBrowser(QMainWindow):
                 "{ip_str}",
                 {logs_json},
                 {phoneVol},
-                {pcVol}
+                {pcVol},
+                {apps_json}
             );
         """
 
@@ -191,6 +203,7 @@ class SafeBrowser(QMainWindow):
             status.get("logs", []),
             status.get("phone_vol", 0.0),
             status.get("pc_vol", 0.0),
+            status.get("blocking_apps", [])
         )
 
     def update_camera_feed(self, q_image):

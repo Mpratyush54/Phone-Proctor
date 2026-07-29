@@ -47,5 +47,6 @@ class EventLogger:
             f.write(json.dumps(record) + "\n")
 
         # Console output for violations only to reduce noise
-        if event_type == "VIOLATION":
+        # Console output for violations and network logs
+        if event_type in ["VIOLATION", "NETWORK", "INFO", "AUDIO"]:
             print(f"[LOG] {timestamp} | {details}")

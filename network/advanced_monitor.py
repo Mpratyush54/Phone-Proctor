@@ -6,13 +6,13 @@ import socket
 from datetime import datetime
 from collections import defaultdict, deque
 import logging
+import subprocess
 
 class AdvancedNetworkMonitor:
     def __init__(self):
         # Whitelisted Processes (Educational/System)
         self.WHITELIST_PROCESSES = [
-            "python.exe", "svchost.exe", "chrome.exe", "msedge.exe", "firefox.exe",
-            "System", "Registry", "spoolsv.exe", "explorer.exe", "Phone-Proctor.exe"
+             "svchost.exe", "System", "Registry", "spoolsv.exe", "explorer.exe", "Phone-Proctor.exe", "QtWebEngineProcess.exe"
         ]
         
         # Blacklisted Processes (Communication/Cheating)
@@ -32,6 +32,9 @@ class AdvancedNetworkMonitor:
         # Rolling Log of ALL events for display (Thread-safe)
         self.event_log = deque(maxlen=20) 
         self.last_known_connections = set()
+        
+        # Signature Cache (Path -> Signer Name)
+        self.signer_cache = {}
         
         # Sniffer Control
         self.is_sniffing = False
@@ -58,6 +61,73 @@ class AdvancedNetworkMonitor:
             return psutil.Process(pid).name()
         except:
             return "Unknown"
+            
+    def get_file_signer(self, path):
+        """
+        Uses PowerShell to get the Digital Signature Subject of a file.
+        Returns "Unsigned" or the signer name.
+        Cached to avoid repeated heavy subprocess calls.
+        """
+        if not path or path in ["N/A", "Registry", "System", "MemCompression"]: return "System/Virtual"
+        if path in self.signer_cache: return self.signer_cache[path]
+        
+        try:
+            # Fast check: Get-AuthenticodeSignature
+            cmd = [
+                "powershell", "-NoProfile", "-Command",
+                f"try {{ (Get-AuthenticodeSignature '{path}' -ErrorAction Stop).SignerCertificate.Subject }} catch {{ 'Error' }}"
+            ]
+            # CREATE_NO_WINDOW
+            output = subprocess.check_output(cmd, creationflags=0x08000000, timeout=2).decode('utf-8', errors='ignore').strip()
+            
+            if not output or "Error" in output or "CategoryInfo" in output:
+                signer = "Unsigned/Error"
+            else:
+                signer = output
+            
+            self.signer_cache[path] = signer
+            return signer
+        except Exception:
+            self.signer_cache[path] = "Check Failed"
+            return "Check Failed"
+
+    def get_running_process_details(self):
+        """
+        Returns a list of dicts: {'name', 'path', 'signer', 'trusted'} for all running processes.
+        trusted = Signed by Microsoft/Google/Trusted Vendors.
+        """
+        procs = []
+        TRUSTED_SIGNERS = ["Microsoft", "Google", "Mozilla", "Brave", "Opera", "NVIDIA", "Intel", "AMD"]
+        
+        for p in psutil.process_iter(['name', 'exe']):
+            try:
+                name = p.info['name']
+                path = p.info['exe'] or "N/A"
+                
+                # Get Signer (Cached)
+                signer = "Unknown"
+                if path != "N/A":
+                    # Only check signature for suspicious or non-system paths to save time?
+                    # Or check everything once? 
+                    # Let's check everything.
+                    signer = self.get_file_signer(path)
+                
+                # Trust Logic: MUST be signed by a known vendor
+                is_trusted = False
+                if any(t in signer for t in TRUSTED_SIGNERS):
+                    is_trusted = True
+                elif "phone-proctor" in path.lower():
+                    is_trusted = True # Trust ourselves
+                
+                procs.append({
+                    "name": name,
+                    "path": path,
+                    "signer": signer,
+                    "trusted": is_trusted
+                })
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+        return procs
     
     def log_event(self, msg, is_suspicious=False):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -115,9 +185,25 @@ class AdvancedNetworkMonitor:
         self.last_known_connections = current_conns_signature
 
         if suspicious_activity:
-            return suspicious_activity # Just return current suspicious state for persistence check
+            return suspicious_activity 
             
-        return []
+        # 4. Check for Suspicious Script Engines (cmd, powershell) - Even without network
+        # Since this is a "scan", we can afford a quick process check
+        try:
+             for proc in psutil.process_iter(['name']):
+                 try:
+                     pname = proc.info['name'].lower()
+                     if pname in ["cmd.exe", "powershell.exe", "wscript.exe", "cscript.exe", "autohotkey.exe"]:
+                         alert = f"Script Engine Detected: {pname}"
+                         # Avoid spamming
+                         if alert not in self.suspicious_events:
+                             self.log_event(f"⚠️ {alert}", True)
+                             suspicious_activity.append(alert)
+                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                     pass
+        except: pass
+
+        return suspicious_activity
 
     def _sniff_packets(self):
         try:
@@ -168,6 +254,14 @@ class AdvancedNetworkMonitor:
         
     def get_recent_logs(self):
         return list(self.event_log)
+        
+    def get_and_clear_logs(self):
+        """
+        Returns all accumulated logs and clears the buffer.
+        """
+        logs = list(self.event_log)
+        self.event_log.clear()
+        return logs
 
     def get_top_talkers(self):
         sorted_ips = sorted(self.packet_counts.items(), key=lambda x: x[1], reverse=True)

@@ -10,11 +10,12 @@ import speech_recognition as sr
 from collections import deque
 
 class AudioMonitor:
-    def __init__(self, sample_rate=16000, chunk_size=512):
+    def __init__(self, sample_rate=16000, chunk_size=512, logger=None):
         self.sample_rate = sample_rate
         self.chunk_size = chunk_size
         self.format = pyaudio.paInt16
         self.channels = 1
+        self.logger = logger
         
         self.audio = pyaudio.PyAudio()
         self.stream = None
@@ -172,6 +173,17 @@ class AudioMonitor:
             
             # Transcribe
             self._transcribe(filepath)
+            
+            # Log Event
+            if self.logger:
+                transcript_text = getattr(self, "last_transcript", "N/A")
+                # Fix: Pass details as a single dictionary
+                log_data = {
+                    "msg": f"Recording Saved: {filename} ({transcript_text})",
+                    "path": filepath,
+                    "transcript": transcript_text
+                }
+                self.logger.log("AUDIO", log_data)
             
         except Exception as e:
             print(f"[ERROR] Failed to save audio: {e}")

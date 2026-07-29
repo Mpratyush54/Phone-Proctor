@@ -151,9 +151,20 @@
             line-height: 1.5;
         }
 
-        #gaze-data .val { color: #60a5fa; font-weight: bold; }
-        #gaze-data .warn { color: #f87171; font-weight: bold; }
-        #gaze-data .ok { color: #4ade80; font-weight: bold; }
+        #gaze-data .val {
+            color: #60a5fa;
+            font-weight: bold;
+        }
+
+        #gaze-data .warn {
+            color: #f87171;
+            font-weight: bold;
+        }
+
+        #gaze-data .ok {
+            color: #4ade80;
+            font-weight: bold;
+        }
 
         #phone-container::after {
             content: "Phone Feed";
@@ -190,6 +201,7 @@
             margin-bottom: 1rem;
             background: linear-gradient(to right, #60a5fa, #a78bfa);
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
@@ -277,6 +289,9 @@
                 <strong>Network</strong>
                 <div style="font-size: 0.8rem; opacity: 0.7">Monitoring Traffic</div>
             </div>
+        </div>
+
+        <div id="network-logs" style="display: none;">
         </div>
     </div>
 
@@ -574,7 +589,7 @@
         if (gCtx) requestAnimationFrame(drawHead);
 
         // Exposed to Python
-        window.updateGazeViz = function(yaw, pitch, direction, violation, phoneFaceDetected) {
+        window.updateGazeViz = function (yaw, pitch, direction, violation, phoneFaceDetected) {
             targetYaw = yaw || 0;
             targetPitch = pitch || 0;
             gazeDir = direction || 'CENTER';
@@ -584,7 +599,7 @@
 
         // Python Bridge
         console.log("Dashboard JS Loaded");
-        window.updatePhoneStatus = function (connected, ip, logs, phoneVol, pcVol) {
+        window.updatePhoneStatus = function (connected, ip, logs, phoneVol, pcVol, blockingApps) {
             const el = document.getElementById('phone-status');
             const btn = document.getElementById('continue-btn');
             const ipEl = document.getElementById('server-ip');
@@ -593,6 +608,49 @@
                 console.warn("Element #phone-status not found");
                 return;
             }
+
+            // --- BLOCKING APPS MODAL ---
+            const modal = document.getElementById('blocking-modal');
+            const list = document.getElementById('blocking-list');
+
+            // Debounce/avoid re-render
+            const appsStr = JSON.stringify(blockingApps || []);
+            if (window.lastAppsStr !== appsStr) {
+                window.lastAppsStr = appsStr;
+
+                if (blockingApps && blockingApps.length > 0) {
+                    if (modal) modal.style.display = 'flex';
+                    if (list) {
+                        list.innerHTML = "";
+                        blockingApps.forEach(app => {
+                            const row = document.createElement('div');
+                            row.id = 'app-row-' + app.pid;
+                            row.style.display = 'flex';
+                            row.style.justifyContent = 'space-between';
+                            row.style.alignItems = 'center';
+                            row.style.padding = '8px';
+                            row.style.borderBottom = '1px solid rgba(255,255,255,0.1)';
+
+                            // Safe name
+                            const safeName = app.name.replace(/</g, "&lt;");
+
+                            row.innerHTML = `
+                                <div style="text-align:left">
+                                    <div style="font-weight:bold; color:#e2e8f0">${safeName}</div>
+                                    <div style="font-size:0.7rem; opacity:0.6; color:#94a3b8">PID: ${app.pid}</div>
+                                </div>
+                                <button onclick="terminateApp(${app.pid})" style="
+                                    background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; font-weight:bold;
+                                ">TERMINATE</button>
+                            `;
+                            list.appendChild(row);
+                        });
+                    }
+                } else {
+                    if (modal) modal.style.display = 'none';
+                }
+            }
+            // ---------------------------
 
             if (connected) {
                 el.classList.remove('error');
@@ -619,10 +677,97 @@
             }
 
             if (logs && logs.length > 0) {
-                console.log("ALERTS:", logs);
+
+                const logDiv = document.getElementById('network-logs');
                 const title = document.querySelector('h1');
-                if (title) title.innerText = "⚠️ Alert: " + logs[logs.length - 1];
+
+                logs.forEach(msg => {
+                    // Create entry
+                    const entry = document.createElement('div');
+                    entry.style.marginBottom = "4px";
+                    entry.style.borderBottom = "1px solid rgba(255,255,255,0.05)";
+                    entry.style.paddingBottom = "2px";
+
+                    if (msg.startsWith("NET:")) {
+                        // Network Log
+                        entry.style.color = "#64748b";
+                        entry.innerText = msg.replace("NET:", "").trim();
+                    } else if (msg.startsWith("HW:")) {
+                        // Hardware Log
+                        entry.style.color = "#ef4444"; // Red
+                        entry.style.fontWeight = "bold";
+                        entry.innerText = "🔌 " + msg;
+                    } else {
+                        // Critical Alert
+                        entry.style.color = "#f87171";
+                        entry.style.fontWeight = "bold";
+                        entry.innerText = "⚠ " + msg;
+
+                        // Update Header for Critical Alerts Only
+                        // if (title && !msg.includes("Focus Lost")) title.innerText = "⚠️ Alert: " + msg;
+                    }
+
+                    // Append to Sidebar Log
+                    if (logDiv) {
+                        logDiv.prepend(entry);
+                        if (logDiv.children.length > 50) {
+                            logDiv.lastElementChild.remove();
+                        }
+                    }
+                });
             }
+        }
+    </script>
+    <!-- BLOCKING APPS MODAL -->
+    <div id="blocking-modal" style="
+        display: none;
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(15, 23, 42, 0.95);
+        z-index: 99999;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+    ">
+        <div style="
+            background: #1e293b;
+            padding: 2rem;
+            border-radius: 1rem;
+            border: 2px solid #dc2626;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+        ">
+            <div style="font-size: 3rem; margin-bottom: 1rem">🚫</div>
+            <h2 style="color: #f87171; margin-top: 0">Unallowed Application Detected</h2>
+            <p style="color: #94a3b8; margin-bottom: 2rem">
+                The following applications are not allowed during the exam.
+                <br>Please close them to continue.
+            </p>
+
+            <div id="blocking-list" style="
+                text-align: left;
+                background: #0f172a;
+                padding: 1rem;
+                border-radius: 0.5rem;
+                margin-bottom: 2rem;
+                max-height: 200px;
+                overflow-y: auto;
+            "></div>
+
+            <p style="font-size: 0.8rem; color: #64748b">
+                Click "Terminate" to force close the application.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        function terminateApp(pid) {
+            console.log("CMD:KILL:" + pid);
+            // Optimistic UI update
+            document.getElementById('app-row-' + pid).style.opacity = '0.3';
+            document.getElementById('app-row-' + pid).innerHTML += ' (Terminating...)';
         }
     </script>
 </body>

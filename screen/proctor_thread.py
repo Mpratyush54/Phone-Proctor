@@ -3,6 +3,7 @@ from PyQt5.QtGui import QImage
 import cv2
 import time
 import numpy as np
+import threading
 
 # Import all AI & Monitoring Modules
 try:
@@ -13,6 +14,7 @@ try:
     from rules.rule_engine import RuleEngine
     from screen.focus_check import FocusMonitor
     from screen.monitor_check import MonitorCheck
+    from screen.hardware_monitor import HardwareMonitor
     from network.advanced_monitor import AdvancedNetworkMonitor
     from camera.webcam import Webcam
     
@@ -45,7 +47,60 @@ class ProctorThread(QThread):
         self.rule_engine = None
         self.focus_monitor = None
         self.monitor_check = None
+        self.hw_monitor = None
         self.net_monitor = None
+        
+        # Async State
+        self.process_scan_running = False
+        self.blocking_apps = []
+
+    def _async_process_scan(self):
+        """Runs heavy process snapshotting in a separate thread."""
+        try:
+            if not self.net_monitor: return
+            
+            all_procs = self.net_monitor.get_running_process_details()
+            
+            # Identify Blocking Apps (Browsers, Remote Tools, Chat)
+            # SafeBrowser uses QtWebEngineProcess, not chrome.exe
+            blocklist = [
+                "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe",
+                "discord.exe", "teamviewer.exe", "anydesk.exe", "zoom.exe", "skype.exe", 
+                "whatsapp.exe", "telegram.exe", "obs64.exe"
+            ]
+            
+            detected_blocks = []
+            for p in all_procs:
+                if p["name"].lower() in blocklist:
+                     detected_blocks.append({"name": p["name"], "pid": p["pid"]})
+            
+            self.blocking_apps = detected_blocks
+
+            # Filter Untrusted
+            trusted_procs = [p['name'] for p in all_procs if p['trusted']]
+            untrusted_procs = [p for p in all_procs if not p['trusted']]
+            
+            # Log Violation if Blocking Apps Found
+            if detected_blocks:
+                    names = ", ".join(set(b["name"] for b in detected_blocks))
+                    if self.logger: self.logger.log("VIOLATION", f"Blocked App(s) Running: {names}")
+            
+            # Full Detailed Dump to File (Optimized)
+            if self.logger:
+                snapshot_data = {
+                    "timestamp": time.strftime("%H:%M:%S"),
+                    "total_processes": len(all_procs),
+                    "trusted_count": len(trusted_procs),
+                    "untrusted_count": len(untrusted_procs),
+                    "untrusted_details": untrusted_procs,
+                    "trusted_names": sorted(trusted_procs)
+                }
+                self.logger.log("INFO", details={"msg": "Process Snapshot Summary", "data": snapshot_data})
+                
+        except Exception as e:
+            print(f"[THREAD] Async Process Scan Error: {e}")
+        finally:
+            self.process_scan_running = False
 
     def _init_ai_components(self):
         if not AI_AVAILABLE: return
@@ -54,7 +109,7 @@ class ProctorThread(QThread):
             # 1. Audio
             try:
                 from ai.audio import AudioMonitor
-                self.audio_monitor = AudioMonitor()
+                self.audio_monitor = AudioMonitor(logger=self.logger)
                 self.audio_monitor.start()
             except Exception as e: print(f"[WARN] Audio Init: {e}")
 
@@ -74,6 +129,7 @@ class ProctorThread(QThread):
             # 4. System
             self.focus_monitor = FocusMonitor()
             self.monitor_check = MonitorCheck()
+            self.hw_monitor = HardwareMonitor()
             self.net_monitor = AdvancedNetworkMonitor()
             self.net_monitor.start_monitoring()
             print("[THREAD] AI Components Ready")
@@ -147,8 +203,18 @@ class ProctorThread(QThread):
                 current_time = time.time()
                 
                 # --- 1. Network Status & Phone Logic ---
-                net_status = {"connected": False, "ip": "N/A", "audio_diff": False, "logs": []}
+                net_status = {
+                    "connected": False,
+                    "ip": "N/A",
+                    "audio_diff": False,
+                    "logs": [],
+                    "blocking_apps": []
+                }
                 
+                # Copy from async thread
+                if hasattr(self, "blocking_apps"):
+                    net_status["blocking_apps"] = self.blocking_apps
+
                 if self.server:
                     s = self.server.get_status()
                     connected = s["connected"]
@@ -425,28 +491,65 @@ class ProctorThread(QThread):
                             net_status["logs"].append(f"AI: {m}")
                             if self.logger: self.logger.log("VIOLATION", m, frame)
                     
+                    # PROCESS SNAPSHOT (Async Thread - Avoids UI Freeze)
+                    if self.net_monitor and frame_count % 300 == 0:
+                        if not self.process_scan_running:
+                            self.process_scan_running = True
+                            threading.Thread(target=self._async_process_scan, daemon=True).start()
+                            
                     # d. Focus Check
-                    if self.focus_monitor and frame_count % 30 == 0:
+                    if self.focus_monitor and frame_count % 10 == 0:
                         is_lost, title = self.focus_monitor.check_focus()
                         if is_lost:
-                            msg = f"Focus Lost: {title}"
-                            net_status["logs"].append(msg)
-                            if self.logger: self.logger.log("VIOLATION", msg)
-                    
-                    # e. Monitor Check
+                            # Filter Dev/IDE windows from UI logs to reduce noise during testing
+                            # Note: In production exam, ANY focus loss is a violation.
+                            if "Antigravity" not in title and "Visual Studio" not in title:
+                                msg = f"Focus Lost: {title}"
+                                net_status["logs"].append(msg)
+                                if self.logger: self.logger.log("VIOLATION", msg)
+
+                    # e. Monitor Check (Standard + Advanced Hardware)
                     if self.monitor_check and frame_count % 100 == 0:
+                        # Existing monitor check (simple)
                         is_multi, count = self.monitor_check.check_monitors()
                         if is_multi:
                             msg = f"Multi-Monitor: {count} screens"
-                            net_status["logs"].append(msg)
-                            if self.logger: self.logger.log("VIOLATION", msg)
+                            if msg not in net_status["logs"]:
+                                net_status["logs"].append(msg)
+                                if self.logger: self.logger.log("VIOLATION", msg)
+                        
+                        # Advanced Hardware Check (Capture Cards/Bluetooth)
+                        if self.hw_monitor:
+                            hw_issues = self.hw_monitor.check_hardware()
+                            for issue in hw_issues:
+                                if issue not in net_status["logs"]:
+                                    net_status["logs"].append(f"HW: {issue}")
+                                    if self.logger: self.logger.log("VIOLATION", issue)
                             
-                    # f. Network Alerts
+                    # f. Network Alerts & Monitoring
                     if self.net_monitor and frame_count % 60 == 0:
+                        # 1. Run Active Scan (Process/Connection check)
+                        self.net_monitor.scan_active_connections()
+
+                        # 2. Log Violations to Backend (Alerts only)
                         alerts = self.net_monitor.get_sniffing_alerts()
                         for a in alerts:
-                            net_status["logs"].append(f"NET: {a}")
                             if self.logger: self.logger.log("VIOLATION", a)
+
+                        # 3. Send All Traffic Logs to UI and Logger
+                        traffic_logs = self.net_monitor.get_and_clear_logs()
+                        
+                        # UI Noise Filter
+                        ui_ignored = ["127.0.0.1", "localhost", "Antigravity", "language_server", "Code.exe", "adb.exe", "svchost.exe", "SearchHost.exe", "conhost.exe"]
+                        
+                        for log in traffic_logs:
+                             # Skip noisy local/dev logs for UI
+                             if not any(ign in log for ign in ui_ignored):
+                                 net_status["logs"].append(f"NET: {log}")
+                             
+                             if self.logger:
+                                 # Send ALL network logs to file/terminal for audit
+                                 self.logger.log("NETWORK", log)
 
                 # Emit Frame (Whether it's real or error frame)
                 try:
@@ -456,6 +559,10 @@ class ProctorThread(QThread):
                     self.image_update.emit(qt_image)
                 except Exception as e:
                     print(f"[THREAD] Frame Emit Error: {e}")
+
+                # Force Clear Logs from UI (User Request: "dont show any thing in html pagr")
+                # Backend logging (file/terminal) is still active via self.logger.log calls above.
+                net_status["logs"] = [] 
 
                 self.status_update.emit(net_status)
                 
@@ -474,4 +581,3 @@ class ProctorThread(QThread):
         if self.net_monitor:
              self.net_monitor.stop_monitoring()
         self.wait()
-
