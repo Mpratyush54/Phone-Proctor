@@ -5,13 +5,15 @@ import numpy as np
 class HeadPoseEstimator:
     def __init__(self):
         # 3D model points (approximate)
+        # Image coordinates: +x = image right, +y = image down (matches the raw
+        # MediaPipe landmark output and OpenCV's pinhole convention).
         self.model_points = np.array([
             (0.0, 0.0, 0.0),        # Nose tip
-            (0.0, -63.6, -12.5),   # Chin
-            (-43.3, 32.7, -26.0),  # Left eye corner
-            (43.3, 32.7, -26.0),   # Right eye corner
-            (-28.9, -28.9, -24.1), # Left mouth corner
-            (28.9, -28.9, -24.1)   # Right mouth corner
+            (0.0, 63.6, -12.5),    # Chin (below nose in image)
+            (-43.3, -32.7, -26.0),  # Left eye corner
+            (43.3, -32.7, -26.0),   # Right eye corner
+            (-28.9, 28.9, -24.1),   # Left mouth corner
+            (28.9, 28.9, -24.1)     # Right mouth corner
         ], dtype="double")
 
         # MediaPipe landmark indices
@@ -49,8 +51,11 @@ class HeadPoseEstimator:
         rmat, _ = cv2.Rodrigues(rotation_vec)
         angles, _, _, _, _, _ = cv2.RQDecomp3x3(rmat)
 
-        # IMPORTANT: angles are already in degrees
-        pitch = angles[0]
+        # IMPORTANT: angles are already in degrees. The model uses +y = image
+        # down (matches MediaPipe output), so the recovered rotation about X
+        # has opposite sign to the head-local "nose up" convention used by the
+        # simulator/runtime (positive pitch = nose up).
+        pitch = -angles[0]
         yaw = angles[1]
 
         return yaw, pitch

@@ -28,6 +28,8 @@ class ProctorServer:
         self.server_loop = None
         self.server_thread = None
         self.is_running = False
+        self.ws_server = None
+        self._stop_future = None
         
         # Data store
         self.latest_telemetry = {}
@@ -35,6 +37,7 @@ class ProctorServer:
         self.latest_frame = None # Store latest phone frame here
         self.last_frame_time = 0
         self.latest_phone_audio_level = 0
+        self.latest_camera_type = None  # 'front' or 'back' from phone
         self.frame_lock = threading.Lock()
         
         # WebRTC & TCP Managers
@@ -75,10 +78,26 @@ class ProctorServer:
             # max_size=10MB for images
             print(f"[NET] Listening for connections on {self.host}:{self.port}")
             try:
-                async with websockets.serve(self._handle_client, self.host, self.port, max_size=10_000_000): 
-                    await asyncio.Future() # run forever
+                self.ws_server = await websockets.serve(self._handle_client, self.host, self.port, max_size=10_000_000)
             except Exception as e:
                 print(f"[NET] WebSocket Start Error: {e}")
+                return
+
+            # Run forever until stop() resolves this future
+            self._stop_future = asyncio.get_running_loop().create_future()
+            await self._stop_future
+
+            # Graceful cleanup: close WS server (cancels client handlers
+            # cleanly -> no "Task exception was never retrieved"), then TCP.
+            try:
+                self.ws_server.close()
+                await self.ws_server.wait_closed()
+            except Exception as e:
+                print(f"[NET] WS shutdown error: {e}")
+            try:
+                await self.tcp_server.stop()
+            except Exception as e:
+                print(f"[NET] TCP shutdown error: {e}")
 
         self.server_loop.run_until_complete(start())
 
@@ -168,6 +187,11 @@ class ProctorServer:
             if msg_type == "TELEMETRY":
                 # Legacy websocket telemetry (optional fallback)
                 self.latest_telemetry = data
+                # Extract real audio level (0..1 from phone RMS) if present
+                if isinstance(data, dict):
+                    audio_lvl = data.get("audioLevel", None)
+                    if isinstance(audio_lvl, (int, float)):
+                        self.latest_phone_audio_level = float(audio_lvl)
             
             elif msg_type == "WEBRTC_OFFER":
                 # Handle WebRTC Offer
@@ -279,6 +303,9 @@ class ProctorServer:
                 print(f"[CV debug] Error: 'image' key missing in VIDEO_FRAME data")
                 return
             
+            # Track which camera the frame came from (front=room/face, back=desk)
+            self.latest_camera_type = data.get('camera')
+            
             # Robust Base64 Decoding (Fix Padding)
             pad = len(b64_img) % 4
             if pad:
@@ -308,24 +335,27 @@ class ProctorServer:
         if hasattr(self, 'discovery'):
              self.discovery.stop()
         
-        # Stop TCP
-        if self.server_loop and self.tcp_server:
-            # We need to stop the TCP server cleanly
-            # This is tricky from another thread
-            pass
+        # Signal the asyncio loop to shut down gracefully instead of stopping
+        # it mid-await (which produced "Event loop stopped before Future
+        # completed" / "Task exception was never retrieved" on exit).
+        if self.server_loop and self._stop_future and not self._stop_future.done():
+            try:
+                self.server_loop.call_soon_threadsafe(self._stop_future.set_result, None)
+            except RuntimeError:
+                pass
 
-        if self.server_loop:
-             # Stop asyncio loop safely
-             try:
-                self.server_loop.call_soon_threadsafe(self.server_loop.stop)
-             except: pass
+        # Give the background thread a moment to finish cleanup.
+        if self.server_thread and self.server_thread.is_alive():
+            self.server_thread.join(timeout=3)
 
     def get_status(self):
         return {
             "running": self.is_running,
             "ip": self.connected_device_ip,
             "connected": self.connected_device_ip is not None,
-            "latest_telemetry": self.latest_telemetry
+            "latest_telemetry": self.latest_telemetry,
+            "camera": self.latest_camera_type,
+            "phone_audio": self.latest_phone_audio_level
         }
     
     def get_latest_frame(self):

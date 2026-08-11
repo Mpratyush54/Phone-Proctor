@@ -48,6 +48,7 @@ def load_all_sessions(data_dirs=None):
         data_dirs = [
             os.path.join(base, 'dataset'),
             os.path.join(base, 'dataset.old'),
+            os.path.join(base, 'synthetic'),
         ]
     
     sessions = []
@@ -101,12 +102,12 @@ def load_all_sessions(data_dirs=None):
                         verdict = 'CHEATING'
                     
                     # Extract confidence score
-                    m = re.search(r'Confidence:\s*(\d+)/100', content)
+                    m = re.search(r'Confidence:\s*\**\s*(\d+)/100', content)
                     if m:
                         confidence = int(m.group(1))
-                    
+
                     # Extract duration
-                    m = re.search(r'Duration:\s*(\d+)\s*min\s*(\d+)\s*sec', content)
+                    m = re.search(r'Duration:\s*\**\s*(\d+)\s*min\s*(\d+)\s*sec', content)
                     if m:
                         duration_sec = int(m.group(1)) * 60 + int(m.group(2))
             
@@ -329,64 +330,90 @@ def extract_audio_features(audio_dir):
     if not wav_files:
         return {}
 
-    all_rms = []
-    all_zcr = []
-    all_peak = []
-    all_duration = []
-    speech_segments = 0  # segments with energy above threshold
-    total_segments = len(wav_files)
+    stats = _audio_stats_from_paths(
+        [os.path.join(audio_dir, wf) for wf in wav_files])
+    return stats if stats else _zero_audio_features()
 
-    for wf in wav_files:
+
+def _audio_stats_from_paths(wav_paths):
+    """Compute audio feature dict from a list of WAV file paths."""
+    all_rms, all_zcr, all_peak, all_duration = [], [], [], []
+    speech_segments = 0
+    total_segments = len(wav_paths)
+
+    for wf in wav_paths:
         try:
-            sr, data = scipy_wav.read(os.path.join(audio_dir, wf))
+            sr, data = scipy_wav.read(wf)
             if data.dtype != np.float32:
                 data = data.astype(np.float32) / max(np.iinfo(data.dtype).max, 1)
-
             if len(data) == 0:
                 continue
-
-            # RMS energy
             rms = float(np.sqrt(np.mean(data ** 2)))
             all_rms.append(rms)
-
-            # Peak amplitude
             peak = float(np.max(np.abs(data)))
             all_peak.append(peak)
-
-            # Zero crossing rate
             zcr = float(np.sum(np.abs(np.diff(np.sign(data)))) / (2 * len(data)))
             all_zcr.append(zcr)
-
-            # Duration
             dur = len(data) / sr
             all_duration.append(dur)
-
-            # Simple speech detection: RMS > threshold
             if rms > 0.02:
                 speech_segments += 1
-
         except Exception:
             continue
 
-    feats = {}
     if not all_rms:
-        # No valid audio - fill with zeros
-        for k in ['a_rms_mean', 'a_rms_max', 'a_rms_std',
-                   'a_zcr_mean', 'a_peak_mean', 'a_total_duration',
-                   'a_speech_ratio', 'a_clip_count']:
-            feats[k] = 0
-        return feats
+        return None
 
-    feats['a_rms_mean'] = float(np.mean(all_rms))
-    feats['a_rms_max'] = float(np.max(all_rms))
-    feats['a_rms_std'] = float(np.std(all_rms))
-    feats['a_zcr_mean'] = float(np.mean(all_zcr))
-    feats['a_peak_mean'] = float(np.mean(all_peak))
-    feats['a_total_duration'] = float(np.sum(all_duration))
-    feats['a_speech_ratio'] = speech_segments / max(total_segments, 1)
-    feats['a_clip_count'] = total_segments
+    return {
+        'a_rms_mean': float(np.mean(all_rms)),
+        'a_rms_max': float(np.max(all_rms)),
+        'a_rms_std': float(np.std(all_rms)),
+        'a_zcr_mean': float(np.mean(all_zcr)),
+        'a_peak_mean': float(np.mean(all_peak)),
+        'a_total_duration': float(np.sum(all_duration)),
+        'a_speech_ratio': speech_segments / max(total_segments, 1),
+        'a_clip_count': total_segments,
+    }
 
-    return feats
+
+def _zero_audio_features():
+    return {k: 0 for k in ['a_rms_mean', 'a_rms_max', 'a_rms_std',
+                           'a_zcr_mean', 'a_peak_mean', 'a_total_duration',
+                           'a_speech_ratio', 'a_clip_count']}
+
+
+def extract_session_audio_features(session_path, events):
+    """Extract per-session audio features from the WAV paths referenced in a
+    session's AUDIO events (and any audio/*.wav inside the session dir)."""
+    if not _SCIPY:
+        return _zero_audio_features()
+
+    wav_paths = []
+    seen = set()
+    for evt in events:
+        if evt.get('type') != 'AUDIO':
+            continue
+        data = evt.get('data')
+        p = data.get('path') if isinstance(data, dict) else None
+        if not p:
+            continue
+        full = os.path.join(session_path, p) if not os.path.isabs(p) else p
+        if os.path.isfile(full) and full not in seen:
+            seen.add(full)
+            wav_paths.append(full)
+
+    if not wav_paths:
+        audio_dir = os.path.join(session_path, 'audio')
+        if os.path.isdir(audio_dir):
+            for f in sorted(os.listdir(audio_dir)):
+                if f.endswith('.wav'):
+                    wav_paths.append(os.path.join(audio_dir, f))
+
+    if not wav_paths:
+        return _zero_audio_features()
+
+    stats = _audio_stats_from_paths(wav_paths)
+    return stats if stats else _zero_audio_features()
 
 
 # ──────────────────────────────────────────────────
@@ -608,36 +635,35 @@ class CheatPredictor:
         y_data = []
         skipped = 0
         
-        # Audio dir is shared across sessions
+        # Audio dir is a fallback when sessions carry no own WAV clips
         audio_dir = os.path.join(os.path.dirname(__file__), '..', 'data', 'audio')
         audio_feats_shared = extract_audio_features(audio_dir)
         if audio_feats_shared:
-            print(f"[AI] Audio features extracted: {len(audio_feats_shared)} features from {audio_feats_shared.get('a_clip_count', 0)} clips")
+            print(f"[AI] Shared audio features extracted: {len(audio_feats_shared)} features from {audio_feats_shared.get('a_clip_count', 0)} clips (fallback)")
         else:
-            print("[AI] No audio data found - audio features will be zeroed")
-        
+            print("[AI] No shared audio data found - audio features will be zeroed for sessions without clips")
+
         print("[AI] Extracting vision features from images (this may take a moment)...")
-        
+
         for i, sess in enumerate(sessions):
             # A) Event log features
             features = extract_session_features(sess['events'], sess['duration_sec'])
             if features is None:
                 skipped += 1
                 continue
-            
+
             # B) Vision features from violation images
             vis_feats = extract_vision_features(
                 sess.get('image_paths', []),
                 sess['path']
             )
             features.update(vis_feats)
-            
-            # C) Audio features (shared across sessions for now)
-            features.update(audio_feats_shared if audio_feats_shared else {
-                k: 0 for k in ['a_rms_mean', 'a_rms_max', 'a_rms_std',
-                                'a_zcr_mean', 'a_peak_mean', 'a_total_duration',
-                                'a_speech_ratio', 'a_clip_count']
-            })
+
+            # C) Audio features (per-session WAV clips, shared dir as fallback)
+            audio_feats = extract_session_audio_features(sess['path'], sess['events'])
+            if not audio_feats or audio_feats.get('a_clip_count', 0) == 0:
+                audio_feats = audio_feats_shared if audio_feats_shared else audio_feats
+            features.update(audio_feats)
             
             label = verdict_to_label(sess['verdict'], sess['confidence'])
             X_data.append(features)

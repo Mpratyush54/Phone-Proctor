@@ -37,6 +37,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIRS = [
     os.path.join(BASE_DIR, 'data', 'dataset'),
     os.path.join(BASE_DIR, 'data', 'dataset.old'),
+    os.path.join(BASE_DIR, 'data', 'synthetic'),
 ]
 AUDIO_DIR = os.path.join(BASE_DIR, 'data', 'audio')
 MODEL_SAVE_PATH = os.path.join(BASE_DIR, 'models', 'cheat_model_unsupervised.pkl')
@@ -128,7 +129,7 @@ def step1_load_data():
                         verdict = 'SUSPICIOUS'
                     elif 'CHEATING' in content:
                         verdict = 'CHEATING'
-                    m = re.search(r'Confidence:\s*(\d+)/100', content)
+                    m = re.search(r'Confidence:\s*\**\s*(\d+)/100', content)
                     if m:
                         confidence = int(m.group(1))
 

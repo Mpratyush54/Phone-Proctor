@@ -1,0 +1,83 @@
+# Phone-Proctor Configuration
+# All tunable thresholds + rule engine settings centralized here.
+# Loaded by rules/thresholds.py (see Thresholds.load_from_yaml).
+
+rules:
+  face_missing_threshold_sec: 5
+  multiple_faces_threshold_sec: 2
+  look_away_threshold_sec: 0.5
+  yaw_threshold_deg: 35
+  pitch_threshold_deg: 30
+
+gaze:
+  # GazeEstimator ratios (0..1). Center band = [gaze_center_low, gaze_center_high]
+  gaze_center_low: 0.42
+  gaze_center_high: 0.58
+  gaze_vertical_low: 0.40
+  gaze_vertical_high: 0.60
+
+confidence_engine:
+  w_vad: 0.4
+  w_lip: 0.3
+  w_gaze: 0.3
+  vad_threshold: 0.6
+  lip_threshold: 0.5
+  head_yaw_threshold_deg: 25
+  head_pitch_threshold_deg: 20
+
+fusion:
+  # Weighted multi-modal fusion (see fusion/score_fusion.py)
+  weights:
+    gaze_away: 0.20
+    head_away: 0.20
+    phone_face: 0.25
+    multi_face: 0.15
+    no_face: 0.05
+    object: 0.10
+    audio: 0.05
+    network: 0.30
+  warning_score: 0.30
+  flag_score: 0.60
+
+network_integrity:
+  # VISION.md Section 5: Hotspot whitelist, device count, data spikes (NO packet sniffing).
+  allowed_ssids: []          # e.g. ["GalaxyProctor_5G"] ; empty = skip hotspot enforcement
+  enforce_hotspot: true
+  expected_devices_min: 1    # only the laptop is expected
+  expected_devices_max: 3    # laptop + phone + tolerated
+  device_check_interval_sec: 10
+  data_spike_upload_kbs: 80  # sustained upload KB/s that is suspicious
+  data_spike_download_kbs: 300
+  data_spike_window_sec: 5   # must persist this long before violation
+
+room_scan:
+  # VISION.md Section 1 + Design doc 12.1: pre-exam room scan baseline
+  scan_enabled: true
+  base_frames: 15            # frames to collect for baseline
+  change_threshold: 0.18     # RMS frame-diff ratio above this = environment changed
+  min_second_person_frames: 3  # consecutive frames with 2+ faces to flag
+  restricted_classes:        # YOLO class names to log during scan
+    - cell phone
+    - book
+    - remote
+    - tv
+
+triangulation:
+  # Design doc 12.2: 3D gaze triangulation (webcam frontal + phone side)
+  screen_distance_cm: 60.0
+  screen_half_width_cm: 40.0
+  screen_half_height_cm: 25.0
+  phone_offset_x_cm: 45.0    # phone camera offset from webcam in the X axis
+  phone_offset_z_cm: 30.0    # phone in front of webcam plane
+  gaze_cone_deg: 5.0
+
+camera:
+  width: 640
+  height: 480
+  fps: 30
+
+audio:
+  sample_rate: 16000
+  chunk_size: 512
+  noise_threshold: 0.2       # RMS volume gate for PC/phone audio comparison
+  silence_threshold_sec: 1.5

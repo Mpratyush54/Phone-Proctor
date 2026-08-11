@@ -15,13 +15,72 @@ os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
 try:
     from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox
     from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
-    from PyQt5.QtCore import QUrl, Qt, QBuffer, QIODevice
-    from PyQt5.QtGui import QShowEvent
+    from PyQt5.QtCore import QUrl, Qt, QBuffer, QIODevice, QObject, QThread, pyqtSignal, pyqtSlot
+    from PyQt5.QtGui import QShowEvent, QImage
 except ImportError as e:
     print(f"[CRITICAL ERROR] Missing Dependencies for Safe Browser: {e}")
     print("pip install PyQt5 PyQtWebEngine")
     input("Press Enter to close window...")
     sys.exit(1)
+
+
+# ==========================
+# Feed Encoder Worker (off GUI thread)
+# ==========================
+class FeedEncoder(QObject):
+    """Encodes QImage frames to base64 JPEG on its own thread so the GUI
+    thread only does the cheap runJavaScript call. Coalesces to the latest
+    frame if a previous encode is still in flight, so a slow renderer never
+    causes an unbounded queue / lag buildup."""
+
+    camera_ready = pyqtSignal(str)
+    phone_ready = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self._camera_busy = False
+        self._camera_pending = None
+        self._phone_busy = False
+        self._phone_pending = None
+
+    @staticmethod
+    def _to_b64(q_image):
+        ba = QBuffer()
+        ba.open(QIODevice.ReadWrite)
+        q_image.save(ba, "JPG", 50)
+        return ba.data().toBase64().data().decode()
+
+    @pyqtSlot(QImage)
+    def encode_camera(self, q_image):
+        if self._camera_busy:
+            self._camera_pending = q_image
+            return
+        self._camera_busy = True
+        try:
+            b64 = self._to_b64(q_image)
+        finally:
+            self._camera_busy = False
+        self.camera_ready.emit(b64)
+        pending = self._camera_pending
+        self._camera_pending = None
+        if pending is not None:
+            self.encode_camera(pending)
+
+    @pyqtSlot(QImage)
+    def encode_phone(self, q_image):
+        if self._phone_busy:
+            self._phone_pending = q_image
+            return
+        self._phone_busy = True
+        try:
+            b64 = self._to_b64(q_image)
+        finally:
+            self._phone_busy = False
+        self.phone_ready.emit(b64)
+        pending = self._phone_pending
+        self._phone_pending = None
+        if pending is not None:
+            self.encode_phone(pending)
 
 
 # ==========================
@@ -104,6 +163,9 @@ class SecurePage(QWebEnginePage):
 # Safe Browser Window
 # ==========================
 class SafeBrowser(QMainWindow):
+    camera_request = pyqtSignal(QImage)
+    phone_request = pyqtSignal(QImage)
+
     def __init__(self):
         super().__init__()
 
@@ -124,11 +186,11 @@ class SafeBrowser(QMainWindow):
 
         self.setWindowTitle("Secure Exam Environment")
 
-        # Preserve fullscreen lock
-        # self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
-        # self.showFullScreen()
+        # Fullscreen lock: frameless + always-on-top + fullscreen
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+        self.showFullScreen()
         self.activateWindow()
-        # self.raise_()
+        self.raise_()
 
         log("Fullscreen + TopMost applied")
 
@@ -162,11 +224,27 @@ class SafeBrowser(QMainWindow):
         self.browser.setUrl(url)
         self.setCentralWidget(self.browser)
 
+        # Feed encoding happens on a worker thread: the GUI thread only
+        # receives the finished base64 string and does the runJavaScript call.
+        self._encoder = FeedEncoder()
+        self._encoder_thread = QThread(self)
+        self._encoder.moveToThread(self._encoder_thread)
+        self._encoder_thread.start()
+
+        # GUI thread -> encoder thread (queued)
+        self.camera_request.connect(self._encoder.encode_camera)
+        self.phone_request.connect(self._encoder.encode_phone)
+        # Encoder thread -> GUI thread (queued)
+        self._encoder.camera_ready.connect(self._inject_camera_feed)
+        self._encoder.phone_ready.connect(self._inject_phone_feed)
+
         self.is_loaded = False
+        self._warned_phone_feed = False
         self.browser.loadFinished.connect(self._on_load_finished)
 
     def _on_load_finished(self, ok):
         self.is_loaded = ok
+        self._warned_phone_feed = False
         print(f"[BROWSER] Load Status: {'SUCCESS' if ok else 'FAILED'}")
         if ok:
             self.update_phone_status(False, "N/A")
@@ -197,6 +275,17 @@ class SafeBrowser(QMainWindow):
         self.browser.page().runJavaScript(js)
 
     def update_status_signal(self, status):
+        # Throttle: status text/numbers don't need per-frame refresh (~33fps).
+        # 2Hz is plenty and removes a huge GUI-thread load (json.dumps + JS
+        # injection on every single proctor-loop tick caused lag/freezes).
+        import time
+        current_time = time.time()
+        if not hasattr(self, "last_status_update"):
+            self.last_status_update = 0
+        if current_time - self.last_status_update < 0.5:
+            return
+        self.last_status_update = current_time
+
         self.update_phone_status(
             status.get("connected", False),
             status.get("ip", "N/A"),
@@ -209,23 +298,9 @@ class SafeBrowser(QMainWindow):
     def update_camera_feed(self, q_image):
         if not self.is_loaded:
             return
+        self.camera_request.emit(q_image)
 
-        import time
-        current_time = time.time()
-
-        if not hasattr(self, "last_cam_frame"):
-            self.last_cam_frame = 0
-
-        if current_time - self.last_cam_frame < 0.1:
-            return
-
-        self.last_cam_frame = current_time
-
-        ba = QBuffer()
-        ba.open(QIODevice.ReadWrite)
-        q_image.save(ba, "JPG", 50)
-        b64_data = ba.data().toBase64().data().decode()
-
+    def _inject_camera_feed(self, b64_data):
         js = f"""
         (function() {{
             var el = document.getElementById('camera-feed');
@@ -234,40 +309,25 @@ class SafeBrowser(QMainWindow):
             }}
         }})();
         """
-
         self.browser.page().runJavaScript(js)
 
     def update_phone_feed(self, q_image):
         if not self.is_loaded:
             return
+        self.phone_request.emit(q_image)
 
-        import time
-        current_time = time.time()
-
-        if not hasattr(self, "last_phone_frame"):
-            self.last_phone_frame = 0
-
-        if current_time - self.last_phone_frame < 0.1:
-            return
-
-        self.last_phone_frame = current_time
-
-        ba = QBuffer()
-        ba.open(QIODevice.ReadWrite)
-        q_image.save(ba, "JPG", 50)
-        b64_data = ba.data().toBase64().data().decode()
-
+    def _inject_phone_feed(self, b64_data):
         js = f"""
         (function() {{
             var el = document.getElementById('phone-feed');
             if (el) {{
                 el.src = "data:image/jpeg;base64,{b64_data}";
-            }} else {{
-                console.error("PY: phone-feed element missing!");
+            }} else if (!window.__phoneFeedWarned) {{
+                window.__phoneFeedWarned = true;
+                console.warn("PY: phone-feed element missing");
             }}
         }})();
         """
-        
         self.browser.page().runJavaScript(js)
 
     def update_gaze_viz(self, yaw, pitch, direction, violation, phone_face):
@@ -296,9 +356,16 @@ class SafeBrowser(QMainWindow):
         """
         self.browser.page().runJavaScript(js)
 
-        def keyPressEvent(self, event):
-            if event.key() == Qt.Key_Escape:
-                self.close()
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.close()
+
+    def closeEvent(self, event):
+        # Stop the encoder worker thread cleanly.
+        if getattr(self, "_encoder_thread", None) and self._encoder_thread.isRunning():
+            self._encoder_thread.quit()
+            self._encoder_thread.wait(2000)
+        super().closeEvent(event)
 
 
 # ==========================

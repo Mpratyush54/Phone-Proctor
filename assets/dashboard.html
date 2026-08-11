@@ -605,7 +605,10 @@
             const ipEl = document.getElementById('server-ip');
 
             if (!el) {
-                console.warn("Element #phone-status not found");
+                if (!window.__phoneStatusWarned) {
+                    window.__phoneStatusWarned = true;
+                    console.warn("Element #phone-status not found");
+                }
                 return;
             }
 

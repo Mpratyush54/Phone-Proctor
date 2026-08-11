@@ -12,11 +12,33 @@ try:
     from gaze.head_pose import HeadPoseEstimator
     from gaze.gaze_estimator import GazeEstimator
     from rules.rule_engine import RuleEngine
+    from rules.thresholds import Thresholds
     from screen.focus_check import FocusMonitor
     from screen.monitor_check import MonitorCheck
     from screen.hardware_monitor import HardwareMonitor
     from network.advanced_monitor import AdvancedNetworkMonitor
+    from network.integrity_monitor import NetworkIntegrityMonitor
     from camera.webcam import Webcam
+
+    # Fusion / multi-modal modules
+    from fusion.score_fusion import ScoreFusion
+    from fusion.gaze_triangulation import GazeTriangulator
+
+    # Analysis modules
+    from analysis.room_scan import RoomScanner
+
+    # Confidence engine + lip reading (were defined but never wired in)
+    try:
+        from ai.confidence_engine import ConfidenceEngine
+    except ImportError as e:
+        ConfidenceEngine = None
+        print(f"[THREAD] ConfidenceEngine unavailable: {e}")
+
+    try:
+        from ai.lip_reading import LipFeatureExtractor
+    except ImportError as e:
+        LipFeatureExtractor = None
+        print(f"[THREAD] LipFeatureExtractor unavailable: {e}")
     
     AI_AVAILABLE = True
 except ImportError as e:
@@ -49,10 +71,24 @@ class ProctorThread(QThread):
         self.monitor_check = None
         self.hw_monitor = None
         self.net_monitor = None
+
+        # Fusion / multi-modal modules
+        self.score_fusion = None
+        self.triangulator = None
+        self.confidence_engine = None
+        self.lip_reader = None
+        self.room_scanner = None
+        self.net_integrity = None
+        self.thresholds = None
         
         # Async State
         self.process_scan_running = False
         self.blocking_apps = []
+
+        # Persistent dedupe for state-type violations that repeat every frame
+        # (e.g. NETWORK_INTEGRITY device count). Prevents log spam for the same
+        # unchanged condition while still re-reporting if the message changes.
+        self._reported_integrity_violations = set()
 
     def _async_process_scan(self):
         """Runs heavy process snapshotting in a separate thread."""
@@ -125,6 +161,7 @@ class ProctorThread(QThread):
             self.head_pose = HeadPoseEstimator()
             self.gaze_estimator = GazeEstimator()
             self.rule_engine = RuleEngine()
+            self.thresholds = Thresholds()
             
             # 4. System
             self.focus_monitor = FocusMonitor()
@@ -132,6 +169,36 @@ class ProctorThread(QThread):
             self.hw_monitor = HardwareMonitor()
             self.net_monitor = AdvancedNetworkMonitor()
             self.net_monitor.start_monitoring()
+
+            # 5. Fusion / multi-modal (VISION.md Sections 6 & 7)
+            self.score_fusion = ScoreFusion(thresholds=self.thresholds)
+            self.triangulator = GazeTriangulator(thresholds=self.thresholds)
+            self.confidence_engine = ConfidenceEngine() if ConfidenceEngine else None
+            self.lip_reader = None
+            if LipFeatureExtractor:
+                try:
+                    self.lip_reader = LipFeatureExtractor()
+                except Exception as e:
+                    print(f"[WARN] LipReader Init: {e}")
+
+            # 6. Network integrity (VISION.md Section 5)
+            try:
+                self.net_integrity = NetworkIntegrityMonitor(thresholds=self.thresholds)
+            except Exception as e:
+                print(f"[WARN] NetIntegrity Init: {e}")
+                self.net_integrity = None
+
+            # 7. Room scanner (Design Doc 12.1)
+            try:
+                self.room_scanner = RoomScanner(
+                    thresholds=self.thresholds,
+                    object_detector=self.obj_detector,
+                    face_detector=self.face_detector,
+                )
+            except Exception as e:
+                print(f"[WARN] RoomScanner Init: {e}")
+                self.room_scanner = None
+
             print("[THREAD] AI Components Ready")
         except Exception as e:
             print(f"[ERROR] AI Init Failed: {e}")
@@ -259,10 +326,31 @@ class ProctorThread(QThread):
                                 for (px, py, pw, ph) in p_faces:
                                         cv2.rectangle(display_frame, (px, py), (px+pw, py+ph), (0, 0, 255), 3)
 
+                # A2. Room Scan Baseline Feeding (Pre-Exam, Design Doc 12.1)
+                # While waiting for calibration to finish (phone active), feed
+                # phone frames into the room-scanner to build the environment baseline.
+                if (self.room_scanner and phone_frame is not None
+                        and self.calibrating and not self.room_scanner.has_baseline):
+                    # Rate-limit feeding to keep the loop fast
+                    if frame_count % 5 == 0:
+                        self.room_scanner.feed_baseline_frame(phone_frame)
+
+                # A3. Periodic Room Re-Scan (During Exam)
+                if (self.room_scanner and phone_frame is not None and not self.calibrating):
+                    scan = self.room_scanner.scan_frame(phone_frame, cooldown_sec=5.0)
+                    if scan["changed"]:
+                        for note in scan["notes"]:
+                            if note not in net_status["logs"]:
+                                net_status["logs"].append(f"ROOM: {note}")
+                                if self.logger:
+                                    self.logger.log("VIOLATION", f"ROOM: {note}", phone_frame)
+
                 # B. Object Detection (YOLO - Server Side)
+                detections_this_frame = False
                 if self.obj_detector and frame_count % 30 == 0:
                     detections, _ = self.obj_detector.detect(phone_frame)
                     if detections:
+                        detections_this_frame = True
                         for d in detections:
                             # Log format: { object: "name", confidence: 0.XX, bbox: [...] } (Simplified for log)
                             log_msg = f"OBJECT: {d}" 
@@ -421,6 +509,14 @@ class ProctorThread(QThread):
                                         if self.calib_timer > 30:
                                             self.calibrating = False
                                             print("[CALIB] Calibration Finished. Monitoring Active.")
+                                            # Finalize room-scan baseline now that
+                                            # calibration frames have been collected.
+                                            if self.room_scanner:
+                                                ok, notes = self.room_scanner.build_baseline()
+                                                for n in notes:
+                                                    print(f"[ROOM] {n}")
+                                                    if self.logger:
+                                                        self.logger.log("INFO", details=n)
 
                                 # --- MONITORING PHASE ---
                                 else:
@@ -485,6 +581,115 @@ class ProctorThread(QThread):
                                         )
                                     except: pass
 
+                                    # ── Multi-Modal Fusion (VISION Section 6/7) ──
+                                    # 1. 3D Gaze Triangulation (Design Doc 12.2)
+                                    triangulation = None
+                                    if self.triangulator:
+                                        try:
+                                            triangulation = self.triangulator.triangulate(
+                                                float(yaw), float(pitch),
+                                                phone_face_detected=self.phone_face_detected,
+                                            )
+                                            if triangulation["looking_at_phone"]:
+                                                msg = f"GAZE TRIANGULATION: looking at phone region (dist {triangulation['phone_distance_cm']}cm)"
+                                                net_status["logs"].append(msg)
+                                                if self.logger:
+                                                    self.logger.log("VIOLATION", msg, frame)
+                                        except Exception as e:
+                                            print(f"[THREAD] Triangulation Error: {e}")
+
+                                    # 2. Lip Reading + Confidence Engine
+                                    vad_prob = 0.0
+                                    lip_prob = 0.0
+                                    if self.audio_monitor:
+                                        try:
+                                            vad_prob = self.audio_monitor.get_voice_activity()
+                                        except Exception:
+                                            vad_prob = 0.0
+                                    if self.lip_reader:
+                                        try:
+                                            lip_prob, _ = self.lip_reader.process(frame, landmarks)
+                                        except Exception as e:
+                                            print(f"[THREAD] LipReader Error: {e}")
+
+                                    confidence_result = None
+                                    if self.confidence_engine:
+                                        try:
+                                            confidence_result = self.confidence_engine.evaluate(
+                                                vad_prob, lip_prob,
+                                                raw_yaw, raw_pitch, face_count
+                                            )
+                                            if confidence_result["status"] != "SAFE":
+                                                for r in confidence_result["reasons"]:
+                                                    full = f"CONFIDENCE [{confidence_result['status']}]: {r}"
+                                                    if full not in net_status["logs"]:
+                                                        net_status["logs"].append(full)
+                                                        if self.logger:
+                                                            self.logger.log("VIOLATION", full, frame)
+                                        except Exception as e:
+                                            print(f"[THREAD] ConfidenceEngine Error: {e}")
+
+                                    # 3. Score Fuser (all signals -> single confidence)
+                                    if self.score_fusion:
+                                        try:
+                                            fused = self.score_fusion.fuse({
+                                                "gaze_away": 1.0 if is_gaze_away else 0.0,
+                                                "head_away": 1.0 if is_head_away else 0.0,
+                                                "phone_face": 1.0 if self.phone_face_detected else 0.0,
+                                                "multi_face": 1.0 if face_count > 1 else 0.0,
+                                                "no_face": 1.0 if face_count == 0 else 0.0,
+                                                "object": 1.0 if detections_this_frame else 0.0,
+                                                "audio": 1.0 if vad_prob > 0.5 else 0.0,
+                                            })
+                                            if fused["status"] != "SAFE":
+                                                for r in fused["reasons"]:
+                                                    full = f"FUSION [{fused['status']} {fused['score']:.2f}]: {r}"
+                                                    if full not in net_status["logs"]:
+                                                        net_status["logs"].append(full)
+                                                        if self.logger:
+                                                            self.logger.log("VIOLATION", full, frame)
+                                        except Exception as e:
+                                            print(f"[THREAD] ScoreFusion Error: {e}")
+
+                                        # c0. Periodic METRICS logging (~2 Hz) for model training.
+                                        #     Real sessions now emit the same schema as the synthetic
+                                        #     data produced by tools/generate_synthetic_data.py, so a
+                                        #     single frame-model can train on both.
+                                        if frame_count % 15 == 0 and self.logger:
+                                            try:
+                                                fused_obj = locals().get("fused") or {}
+                                                fused_score = float(fused_obj.get("score", 0.0))
+                                                fused_status = fused_obj.get("status", "SAFE")
+                                                gaz_d = gaze_data.get("direction", "CENTER") if gaze_data else "CENTER"
+                                                tri_obj = triangulation or {}
+                                                metric_data = {
+                                                    "gaze_h": round(float(gaze_data.get("h_ratio", 0.5)), 4) if gaze_data else 0.5,
+                                                    "gaze_v": round(float(gaze_data.get("v_ratio", 0.5)), 4) if gaze_data else 0.5,
+                                                    "head_yaw": round(float(raw_yaw), 2),
+                                                    "head_pitch": round(float(raw_pitch), 2),
+                                                    "yaw_diff": round(float(yaw), 2),
+                                                    "pitch_diff": round(float(pitch), 2),
+                                                    "face_count": int(face_count),
+                                                    "phone_face": 1 if self.phone_face_detected else 0,
+                                                    "phone_yaw": 0.0,
+                                                    "phone_pitch": 0.0,
+                                                    "gaze_direction": gaz_d,
+                                                    "screen_region": tri_obj.get("screen_region", "OFF_SCREEN"),
+                                                    "on_screen": 1 if tri_obj.get("on_screen") else 0,
+                                                    "looking_at_phone": 1 if tri_obj.get("looking_at_phone") else 0,
+                                                    "phone_distance_cm": round(tri_obj.get("phone_distance_cm", -1.0), 2) if tri_obj else -1.0,
+                                                    "vad_prob": round(float(vad_prob), 4),
+                                                    "lip_prob": round(float(lip_prob), 4),
+                                                    "fused_score": fused_score,
+                                                    "fused_status": fused_status,
+                                                    "head_away": int(is_head_away),
+                                                    "gaze_away": int(is_gaze_away),
+                                                    "is_looking_away": int(is_head_away or is_gaze_away),
+                                                }
+                                                self.logger.log("METRICS", metric_data)
+                                            except Exception as e:
+                                                print(f"[THREAD] METRICS Log Error: {e}")
+
                         # c. Face Count Rules
                         msgs = self.rule_engine.evaluate_faces(face_count)
                         for m in msgs:
@@ -501,9 +706,15 @@ class ProctorThread(QThread):
                     if self.focus_monitor and frame_count % 10 == 0:
                         is_lost, title = self.focus_monitor.check_focus()
                         if is_lost:
-                            # Filter Dev/IDE windows from UI logs to reduce noise during testing
-                            # Note: In production exam, ANY focus loss is a violation.
-                            if "Antigravity" not in title and "Visual Studio" not in title:
+                            # Filter Dev/IDE/shell windows from UI logs to reduce noise
+                            # during testing. Note: In production exam, ANY focus loss
+                            # is a violation.
+                            dev_noise = [
+                                "Antigravity", "Visual Studio", "Windows Terminal",
+                                "Command Prompt", "cmd.exe", "powershell", "PowerShell",
+                                "conhost", "python", "pythonw", "node", "Node.js",
+                            ]
+                            if not any(dev in title for dev in dev_noise):
                                 msg = f"Focus Lost: {title}"
                                 net_status["logs"].append(msg)
                                 if self.logger: self.logger.log("VIOLATION", msg)
@@ -546,10 +757,27 @@ class ProctorThread(QThread):
                              # Skip noisy local/dev logs for UI
                              if not any(ign in log for ign in ui_ignored):
                                  net_status["logs"].append(f"NET: {log}")
-                             
+                              
                              if self.logger:
-                                 # Send ALL network logs to file/terminal for audit
-                                 self.logger.log("NETWORK", log)
+                                  # Send ALL network logs to file/terminal for audit
+                                  self.logger.log("NETWORK", log)
+
+                    # g. Network Integrity (VISION Section 5: hotspot whitelist,
+                    #    device count, data spikes)
+                    if self.net_integrity and frame_count % 60 == 0:
+                        try:
+                            violations, health = self.net_integrity.evaluate()
+                            for v in violations:
+                                # Dedupe unchanged conditions: net_status["logs"]
+                                # is cleared every frame, so only log once until
+                                # the message actually changes.
+                                if v not in self._reported_integrity_violations:
+                                    self._reported_integrity_violations.add(v)
+                                    net_status["logs"].append(v)
+                                    if self.logger:
+                                        self.logger.log("VIOLATION", v)
+                        except Exception as e:
+                            print(f"[THREAD] NetIntegrity Error: {e}")
 
                 # Emit Frame (Whether it's real or error frame)
                 try:

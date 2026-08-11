@@ -1,3 +1,4 @@
+import os
 import psutil
 import scapy.all as scapy
 import threading
@@ -35,6 +36,9 @@ class AdvancedNetworkMonitor:
         
         # Signature Cache (Path -> Signer Name)
         self.signer_cache = {}
+        
+        # Persistent dedupe for script-engine alerts (survives event buffer clears)
+        self._reported_script_engines = set()
         
         # Sniffer Control
         self.is_sniffing = False
@@ -121,6 +125,7 @@ class AdvancedNetworkMonitor:
                 
                 procs.append({
                     "name": name,
+                    "pid": p.pid,
                     "path": path,
                     "signer": signer,
                     "trusted": is_trusted
@@ -190,20 +195,43 @@ class AdvancedNetworkMonitor:
         # 4. Check for Suspicious Script Engines (cmd, powershell) - Even without network
         # Since this is a "scan", we can afford a quick process check
         try:
-             for proc in psutil.process_iter(['name']):
-                 try:
-                     pname = proc.info['name'].lower()
-                     if pname in ["cmd.exe", "powershell.exe", "wscript.exe", "cscript.exe", "autohotkey.exe"]:
-                         alert = f"Script Engine Detected: {pname}"
-                         # Avoid spamming
-                         if alert not in self.suspicious_events:
-                             self.log_event(f"⚠️ {alert}", True)
-                             suspicious_activity.append(alert)
-                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                     pass
+            own_pids = self._get_own_process_tree()
+            for proc in psutil.process_iter(['name', 'pid']):
+                try:
+                    if proc.info['pid'] in own_pids:
+                        # Skip our own process and the terminal that launched us
+                        continue
+                    pname = (proc.info['name'] or '').lower()
+                    if pname in ["cmd.exe", "powershell.exe", "wscript.exe", "cscript.exe", "autohotkey.exe"]:
+                        alert = f"Script Engine Detected: {pname}"
+                        # Persistent dedupe: report each engine once per session.
+                        # self.suspicious_events is cleared every scan by
+                        # get_sniffing_alerts(), so it cannot be used for dedupe.
+                        if alert not in self._reported_script_engines:
+                            self._reported_script_engines.add(alert)
+                            self.log_event(f"⚠️ {alert}", True)
+                            suspicious_activity.append(alert)
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
         except: pass
 
         return suspicious_activity
+
+    def _get_own_process_tree(self):
+        """
+        PIDs of the current process and all of its ancestors (e.g. the terminal
+        that launched the proctor app). Used to avoid self-detection false
+        positives (cmd.exe / powershell.exe that run our own app).
+        """
+        pids = set()
+        try:
+            proc = psutil.Process(os.getpid())
+            pids.add(proc.pid)
+            for parent in proc.parents():
+                pids.add(parent.pid)
+        except Exception:
+            pids.add(os.getpid())
+        return pids
 
     def _sniff_packets(self):
         try:
