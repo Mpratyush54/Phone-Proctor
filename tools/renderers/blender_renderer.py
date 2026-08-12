@@ -121,6 +121,16 @@ class BlenderRenderer(BaseRenderer):
             ys += [v[1] for v in bb]
             zs += [v[2] for v in bb]
         self.head_bounds = (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
+        self._head_cy = (min(ys) + max(ys)) / 2.0
+
+        # Rig root: an empty all head parts are parented to. render() poses this
+        # empty so eyes/brows/teeth stay rigidly attached to the head.
+        self.rig_root = bpy.data.objects.new("RigRoot", None)
+        bpy.context.scene.collection.objects.link(self.rig_root)
+        self.rig_root.location = (0.0, 0.0, 0.0)
+        for o in self.head_objs:
+            o.parent = self.rig_root
+        bpy.context.view_layer.update()
 
         # Camera at origin, default orientation looks down -Z.
         cam = bpy.data.cameras.new("RigCam")
@@ -183,9 +193,9 @@ class BlenderRenderer(BaseRenderer):
         eul = _euler_from_matrix(R)
 
         for o in self.head_objs:
-            o.rotation_euler = eul
-            o.location = (float(hc[0]), float(hc[1]), float(-hc[2]))
             o.hide_render = not visible
+        self.rig_root.rotation_euler = eul
+        self.rig_root.location = (float(hc[0]), float(hc[1] - self._head_cy), float(-hc[2]))
 
         fd, path = tempfile.mkstemp(suffix=".png")
         os.close(fd)
