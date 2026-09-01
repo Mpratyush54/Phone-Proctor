@@ -82,3 +82,7 @@ class ObjectDetector:
             print(f"[AI] Detection Error: {e}")
             
         return detections, annotated_frame
+
+    def close(self):
+        self.model = None
+        self.available = False

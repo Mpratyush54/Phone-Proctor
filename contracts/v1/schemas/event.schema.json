@@ -1,0 +1,27 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Event",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "type", "seq_no", "batch_id", "payload_hash", "payload"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "const": "event" },
+    "msg_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" },
+    "seq_no": { "type": "integer", "minimum": 1 },
+    "batch_id": { "type": "string" },
+    "payload_hash": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["event_type"],
+      "properties": {
+        "event_type": { "type": "string" },
+        "observed_at": { "type": "number" }
+      }
+    }
+  }
+}

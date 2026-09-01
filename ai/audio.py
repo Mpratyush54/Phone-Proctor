@@ -9,6 +9,9 @@ import queue
 import speech_recognition as sr
 from collections import deque
 
+from agent.product_mode import google_stt_enabled
+from utils.paths import audio_dir
+
 class AudioMonitor:
     def __init__(self, sample_rate=16000, chunk_size=512, logger=None):
         self.sample_rate = sample_rate
@@ -25,6 +28,9 @@ class AudioMonitor:
         self.audio_queue = queue.Queue()
         self.process_thread = None
         self.stop_event = threading.Event()
+        # Persistent shared lock — never instantiate a Lock inside the loop.
+        self._chunk_lock = threading.Lock()
+        self._transcript_lock = threading.Lock()
         
         # Buffer for VAD processing
         self.vad_buffer = deque(maxlen=sample_rate * 5) # 5 seconds history
@@ -39,8 +45,7 @@ class AudioMonitor:
         # Transcription Callback
         self.last_transcript = ""
 
-        self.data_dir = os.path.join(os.getcwd(), "data", "audio")
-        os.makedirs(self.data_dir, exist_ok=True)
+        self.data_dir = str(audio_dir())
               
         # Load Silero VAD
         try:
@@ -102,7 +107,7 @@ class AudioMonitor:
                 audio_data = np.frombuffer(in_data, dtype=np.int16)
                 
                 # Update current chunk for real-time VAD display
-                with threading.Lock():
+                with self._chunk_lock:
                     self.current_chunk = audio_data.copy()
                 
                 # 1. VAD Check
@@ -193,10 +198,13 @@ class AudioMonitor:
             with sr.AudioFile(audio_path) as source:
                 audio = self.recognizer.record(source)
             
-            # Using Google Web Speech API (Free and simple)
+            if not google_stt_enabled():
+                # Product default: no off-box transcription.
+                return
             text = self.recognizer.recognize_google(audio)
             print(f"[TRANSCRIPT] {text}")
-            self.last_transcript = text
+            with self._transcript_lock:
+                self.last_transcript = text
                 
         except sr.UnknownValueError:
             pass # No speech recognized
@@ -206,31 +214,45 @@ class AudioMonitor:
             print(f"[ERROR] Transcription failed: {e}")
 
     def get_voice_activity(self):
-        # Just return probability of latest chunk if available
-         if self.current_chunk is not None:
-             return self._check_vad(self.current_chunk)
-         return 0.0
+        with self._chunk_lock:
+            chunk = None if self.current_chunk is None else self.current_chunk.copy()
+        if chunk is not None:
+            return self._check_vad(chunk)
+        return 0.0
 
     def get_current_volume(self):
         """Returns RMS volume of the current audio chunk (0.0 to 1.0 approx)"""
-        if self.current_chunk is not None:
-             # Calculate RMS
-             f = self.current_chunk.astype(np.float32)
+        with self._chunk_lock:
+            chunk = None if self.current_chunk is None else self.current_chunk.copy()
+        if chunk is not None:
+             f = chunk.astype(np.float32)
              rms = np.sqrt(np.mean(f**2))
-             # Normalize roughly (16-bit audio max is 32768)
-             return min(rms / 10000.0, 1.0) # Adjust divisor as needed
+             return min(rms / 10000.0, 1.0)
         return 0.0
 
     def get_last_transcript(self):
-        return self.last_transcript
+        with self._transcript_lock:
+            return self.last_transcript
 
     def stop(self):
         self.stop_event.set()
         self.is_running = False
         if self.process_thread:
-            self.process_thread.join(timeout=1.0)
-            
+            self.process_thread.join(timeout=2.0)
+            self.process_thread = None
         if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-        self.audio.terminate()
+            try:
+                self.stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+        if self.audio:
+            try:
+                self.audio.terminate()
+            except Exception:
+                pass
+            self.audio = None

@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "type": "command",
+  "payload": {
+    "command_id": "c1",
+    "command_type": "EXAM_START",
+    "idempotency_key": "k1"
+  }
+}

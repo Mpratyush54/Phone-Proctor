@@ -1,0 +1,16 @@
+issuer: http://127.0.0.1:5556
+storage:
+  type: memory
+web:
+  http: 0.0.0.0:5556
+staticClients:
+  - id: phone-proctor
+    redirectURIs: ["http://127.0.0.1:8080/api/v1/auth/callback"]
+    name: Phone-Proctor
+    secret: dev-secret
+enablePasswordDB: true
+staticPasswords:
+  - email: "staff@example.com"
+    hash: "$2a$10$2b2/NnnPfa/YNl.fJ/xXeO5j6e5S1vG1m2b2NnnPfaYNlfJxXeO5e" # bcrypt of "password" placeholder
+    username: "staff"
+    userID: "staff-1"

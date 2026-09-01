@@ -1,0 +1,6 @@
+{
+  "exam_id": "e1",
+  "stream_seq": 1,
+  "op": "heartbeat",
+  "session_id": "s1"
+}

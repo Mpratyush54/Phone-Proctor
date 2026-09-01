@@ -1,15 +1,19 @@
 import asyncio
 import json
 
+from agent.product_mode import lan_bind_host
+
+
 class TCPServer:
-    def __init__(self, port, callback):
+    def __init__(self, port, callback, host=None):
         self.port = port
         self.callback = callback
         self.server = None
+        self.host = host if host is not None else lan_bind_host()
 
     async def start(self):
         self.server = await asyncio.start_server(
-            self.handle_client, '0.0.0.0', self.port)
+            self.handle_client, self.host, self.port)
         print(f'[TCP] Telemetry Server listening on port {self.port}')
         # We don't await serve_forever here because we want to run in parallel
         # But start_server returns a Server object which starts listening immediately

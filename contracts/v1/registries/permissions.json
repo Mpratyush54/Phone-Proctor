@@ -1,0 +1,26 @@
+{
+  "permissions": [
+    "exam.read",
+    "exam.write",
+    "exam.end",
+    "roster.import",
+    "session.read",
+    "session.live_view",
+    "session.warn",
+    "session.terminate",
+    "session.command",
+    "assignment.claim",
+    "review.annotate",
+    "appeal.decide",
+    "media.read",
+    "platform.ops"
+  ],
+  "role_templates": {
+    "invigilator": ["exam.read", "session.read", "session.warn", "assignment.claim"],
+    "lead_invigilator": ["exam.read", "exam.write", "session.read", "session.warn", "session.terminate", "session.live_view", "session.command", "assignment.claim"],
+    "exam_admin": ["exam.read", "exam.write", "exam.end", "roster.import", "session.read", "session.command"],
+    "reviewer": ["exam.read", "session.read", "review.annotate", "media.read"],
+    "platform_ops": ["platform.ops"]
+  },
+  "step_up": ["exam.end", "session.terminate", "media.read"]
+}
