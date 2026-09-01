@@ -100,18 +100,49 @@ function Exam({ id }: { id: string }) {
   const [csv, setCsv] = React.useState("student_external_id,display_name\ns1,Ada");
   const [snap, setSnap] = React.useState<Snapshot | null>(null);
   const [ready, setReady] = React.useState("");
-  async function load() {
-    setSnap(await api(`/api/v1/console/snapshot?exam_id=${id}`));
+  async function loadSnapshot() {
+    const s = (await api(`/api/v1/console/snapshot?exam_id=${id}`)) as Snapshot;
+    setSnap(s);
     setReady((await api(`/api/v1/exams/${id}/readiness`)).readiness);
+    return s;
   }
   React.useEffect(() => {
-    load().catch(() => undefined);
+    let stop = false;
+    let current: Snapshot | null = null;
+    (async () => {
+      try {
+        current = await loadSnapshot();
+      } catch {
+        return;
+      }
+      while (!stop && current) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (stop || !current) break;
+        try {
+          const d = await api(`/api/v1/console/deltas?exam_id=${id}&after_seq=${current.stream_seq}`);
+          for (const item of d.items || []) {
+            const applied = applyDelta(current, item);
+            if (applied === "resnapshot") {
+              current = await loadSnapshot();
+              break;
+            }
+            current = applied;
+          }
+          if (!stop && current) setSnap(current);
+        } catch {
+          current = await loadSnapshot();
+        }
+      }
+    })();
+    return () => {
+      stop = true;
+    };
   }, [id]);
   return (
     <main>
       <h1>Command center</h1>
       <p>Readiness (server-derived): <b>{ready || snap?.readiness}</b></p>
-      <button onClick={() => api(`/api/v1/exams/${id}/open`, { method: "POST", body: "{}" }).then(load)}>Open exam</button>
+      <button onClick={() => api(`/api/v1/exams/${id}/open`, { method: "POST", body: "{}" }).then(loadSnapshot)}>Open exam</button>
       <h2>Roster CSV</h2>
       <textarea rows={4} cols={60} value={csv} onChange={(e) => setCsv(e.target.value)} />
       <button
@@ -125,7 +156,7 @@ function Exam({ id }: { id: string }) {
               return { student_external_id, display_name };
             });
           await api(`/api/v1/exams/${id}/roster`, { method: "POST", body: JSON.stringify({ rows }) });
-          await load();
+          await loadSnapshot();
         }}
       >
         Import
@@ -142,6 +173,7 @@ function Exam({ id }: { id: string }) {
       >
         Bulk warn (server receipts)
       </button>
+      <p>Grid uses snapshot then `/api/v1/console/deltas` with `stream_seq`. A gap forces resnapshot.</p>
       <h2>Live grid</h2>
       <div className="grid">
         {(snap?.sessions || []).map((s) => (
@@ -182,6 +214,7 @@ function Shell() {
         <b>Phone-Proctor</b>
         <Link to="/exams">Exams</Link>
         <Link to="/review">Review</Link>
+        <Link to="/platform">Platform</Link>
         <Link to="/login">Login</Link>
       </header>
       <Routes>
@@ -190,6 +223,7 @@ function Shell() {
         <Route path="/exams/:id" element={<Guard perm="exam.read"><ExamGate /></Guard>} />
         <Route path="/sessions/:id" element={<Guard perm="session.read"><SessionGate /></Guard>} />
         <Route path="/review" element={<Guard perm="review.annotate"><main><h1>Event-first review</h1><p>Blind annotation: identity and scores hidden until submit.</p></main></Guard>} />
+        <Route path="/platform" element={<Guard perm="platform.ops"><Platform /></Guard>} />
         <Route path="/" element={<Navigate to="/exams" replace />} />
       </Routes>
     </>
@@ -205,6 +239,20 @@ function SessionGate() {
   return <Drawer id={id} />;
 }
 
+function Platform() {
+  const [view, setView] = React.useState<Record<string, unknown> | null>(null);
+  React.useEffect(() => {
+    api("/api/v1/platform/view").then(setView).catch(() => setView({ error: "unavailable" }));
+  }, []);
+  return (
+    <main>
+      <h1>Platform view</h1>
+      <p>Tenant-blind. Redis failure is still visible on `/api/v1/health/aggregate`.</p>
+      <pre>{JSON.stringify(view, null, 2)}</pre>
+    </main>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={qc}>
     <BrowserRouter>
@@ -212,5 +260,3 @@ createRoot(document.getElementById("root")!).render(
     </BrowserRouter>
   </QueryClientProvider>,
 );
-
-void applyDelta;

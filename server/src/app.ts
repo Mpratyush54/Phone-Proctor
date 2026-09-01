@@ -32,8 +32,23 @@ const OPENAPI = {
     "/api/v1/sessions/{id}/handoff": { post: { summary: "Handoff lease" } },
     "/api/v1/sessions/{id}/pairing-token": { post: { summary: "Phone pairing token" } },
     "/api/v1/sessions/{id}/phone-pair": { post: { summary: "Redeem phone pairing" } },
+    "/api/v1/sessions/{id}/phone-pair/revoke": { post: { summary: "Revoke phone pairing credential" } },
     "/api/v1/console/snapshot": { get: { summary: "Console snapshot" } },
     "/api/v1/console/deltas": { get: { summary: "Console deltas after stream_seq" } },
+    "/api/v1/sessions/{id}/media/uploads": { post: { summary: "Constrained media upload" } },
+    "/api/v1/media/{id}/verify": { post: { summary: "Verify uploaded object" } },
+    "/api/v1/sessions/{id}/thumbnail": { get: { summary: "Short-lived thumbnail" } },
+    "/api/v1/sessions/{id}/livekit": { post: { summary: "LiveKit token" } },
+    "/api/v1/sessions/{id}/live/start": { post: { summary: "Start live publish" } },
+    "/api/v1/sessions/{id}/live/stop": { post: { summary: "Stop live when last viewer leaves" } },
+    "/api/v1/sessions/{id}/legal-hold": { post: { summary: "Freeze legal hold" } },
+    "/api/v1/sessions/{id}/findings": { post: { summary: "Add finding" } },
+    "/api/v1/findings/{id}/reviewers": { post: { summary: "Assign two reviewers" } },
+    "/api/v1/findings/{id}/appeal": { post: { summary: "Appeal finding" } },
+    "/api/v1/models/{alias}": { put: { summary: "Model registry alias rollback" } },
+    "/api/v1/media/inventory": { get: { summary: "Reconcile media inventory" } },
+    "/api/v1/health/aggregate": { get: { summary: "Health aggregator" } },
+    "/api/v1/platform/view": { get: { summary: "Tenant-blind platform view" } },
     "/health/live": { get: { summary: "Liveness" } },
     "/health/ready": { get: { summary: "Readiness" } },
     "/metrics": { get: { summary: "Prometheus metrics" } },
@@ -196,6 +211,10 @@ export function createApp(cfg: AppConfig, store: Store): Express {
 
   app.post("/api/v1/sessions/:id/phone-pair", (req, res) => {
     res.json(store.redeemPhonePairing(req.params.id, req.body.token));
+  });
+
+  app.post("/api/v1/sessions/:id/phone-pair/revoke", (req, res) => {
+    res.json(store.revokePhonePairing(staffFrom(req), req.params.id, req.body.device_credential_id));
   });
 
   app.get("/api/v1/exams/:id/readiness", (req, res) => {

@@ -103,6 +103,7 @@ export class Store {
     this.memberships.set(this.memKey(orgId, userId), { orgId, userId });
     this.roles.push({ orgId, userId, role: "exam_admin" });
     this.roles.push({ orgId, userId, role: "lead_invigilator" });
+    this.roles.push({ orgId, userId, role: "platform_ops" });
     return { orgId, userId };
   }
 
@@ -323,7 +324,25 @@ export class Store {
       expires: nowPlus(5 * 60_000),
       canRegisterAgent: false,
     });
-    return { token: raw, expires_s: 300, can_register_agent: false };
+    return { id, token: raw, expires_s: 300, can_register_agent: false };
+  }
+
+  revokePhonePairing(ctx: StaffContext, sessionId: string, deviceCredentialId?: string) {
+    this.require(ctx, "session.command");
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new ApiError("NOT_FOUND", "session", 404);
+    this.assertOrg(ctx, session.orgId);
+    for (const t of this.pairingTokens.values()) {
+      if (t.sessionId === sessionId) t.redeemed = true;
+    }
+    const revoked: string[] = [];
+    for (const d of this.devices.values()) {
+      if (d.kind !== "phone" || d.enrollmentId !== session.enrollmentId) continue;
+      if (deviceCredentialId && d.id !== deviceCredentialId) continue;
+      d.revoked = true;
+      revoked.push(d.id);
+    }
+    return { revoked: true, device_credential_ids: revoked, can_register_agent: false };
   }
 
   redeemPhonePairing(sessionId: string, pairingToken: string) {
@@ -401,7 +420,7 @@ export class Store {
     const id = uuid();
     const cmd = { id, sessionId, type, idempotencyKey, status: "accepted", orgId: session.orgId };
     this.commands.set(id, cmd);
-    this.appendStream(session.examId, { op: "command", session_id: sessionId, type, status: "accepted" });
+    this.appendStream(session.examId, { op: "upsert", session_id: sessionId, patch: { last_command: type, desired: session.desired } });
     this.audit.push({ orgId: ctx.orgId, actorId: ctx.userId, action: "command:" + type, payload: { sessionId, id } });
     return cmd;
   }
@@ -413,7 +432,7 @@ export class Store {
     cmd.result = { ok, observed };
     const session = this.sessions.get(sessionId)!;
     if (ok) session.observed = observed;
-    this.appendStream(session.examId, { op: "command", session_id: sessionId, status: cmd.status });
+    this.appendStream(session.examId, { op: "upsert", session_id: sessionId, patch: { last_command_status: cmd.status, lifecycle: session.observed } });
     return cmd;
   }
 
@@ -442,7 +461,19 @@ export class Store {
   }
 
   deltas(examId: string, afterSeq: number) {
-    return this.examStream.filter((r) => r.examId === examId && r.seq > afterSeq);
+    return this.examStream
+      .filter((r) => r.examId === examId && r.seq > afterSeq)
+      .map((r) => {
+        const p = (r.payload || {}) as { op?: string; session_id?: string; patch?: Record<string, unknown>; seq?: number };
+        const op = p.op === "remove" || p.op === "heartbeat" || p.op === "event" || p.op === "upsert" ? p.op : "upsert";
+        return {
+          exam_id: examId,
+          stream_seq: r.seq,
+          op,
+          session_id: p.session_id,
+          patch: p.patch,
+        };
+      });
   }
 
   readiness(examId: string): "Incident" | "Blocked" | "Degraded" | "Ready" {

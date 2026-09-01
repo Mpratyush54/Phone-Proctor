@@ -21,6 +21,26 @@ test("B6b pairing cannot register agent; replay denied", () => {
   assert.equal(phone.kind, "phone");
   assert.equal(phone.can_register_agent, false);
   assert.throws(() => store.redeemPhonePairing(cred.session_id, pair.token));
+  const revoked = store.revokePhonePairing(ctx, cred.session_id, phone.device_credential_id);
+  assert.equal(revoked.revoked, true);
+  assert.equal(store.devices.get(phone.device_credential_id)?.revoked, true);
+});
+
+test("B1b console deltas share stream_seq and use contract ops", () => {
+  const store = new Store();
+  const ctx = staff(store);
+  const exam = store.createExam(ctx, "D", "d", {});
+  store.importRoster(ctx, exam.id, [{ student_external_id: "1", display_name: "A" }]);
+  const en = [...store.enrollments.values()][0];
+  const sid = store.redeemEnrollment(store.issueToken(ctx, en.id).token, "fp").session_id;
+  store.acceptCommand(ctx, sid, "WARN", "d1", {});
+  const snap = store.snapshot(exam.id);
+  const items = store.deltas(exam.id, 0);
+  assert.ok(items.length >= 1);
+  assert.equal(items[0].exam_id, exam.id);
+  assert.equal(items[0].stream_seq, 1);
+  assert.ok(["upsert", "remove", "heartbeat", "event"].includes(items[0].op));
+  assert.equal(snap.stream_seq, items[items.length - 1].stream_seq);
 });
 
 test("D4b bulk commands partial failure; G2 redis down degrades fanout", () => {
