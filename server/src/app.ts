@@ -112,6 +112,8 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     res.cookie("pp_session", sess.raw, { httpOnly: true, sameSite: "lax", secure: false });
     res.json({ ok: true, csrf: sess.csrf, org_id: orgId });
   });
+
+  app.post("/api/v1/auth/logout", (req, res) => {
     const raw = req.cookies?.pp_session;
     if (raw) store.logout(raw);
     res.clearCookie("pp_session");

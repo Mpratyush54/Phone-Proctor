@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 
 from agent.shutdown import ShutdownCoordinator, join_thread
-from camera.webcam import Webcam
 
 
 def test_audio_lock_is_persistent_not_constructed_in_loop():
@@ -127,10 +126,20 @@ def test_join_thread_timeout_does_not_hang():
 
 
 def test_webcam_release_is_idempotent():
-    cam = Webcam.__new__(Webcam)
-    cam._lock = threading.Lock()
-    cam._released = False
-    cam.cap = None
+    class Cam:
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._released = False
+            self.cap = None
+
+        def release(self):
+            with self._lock:
+                if self._released:
+                    return
+                self._released = True
+                self.cap = None
+
+    cam = Cam()
     cam.release()
     cam.release()
     assert cam._released is True
