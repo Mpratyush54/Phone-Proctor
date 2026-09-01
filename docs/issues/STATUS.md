@@ -1,6 +1,8 @@
 # Issue resolution map (#1–#66)
 
-Each GitHub issue is implemented on this branch. Merging the PR closes #1–#66.
+Implemented in this repository (PRs #68–#70). GitHub auto-close requires
+`Closes #<n>` in a **commit message** that lands on `master` — PR description
+keywords wrapped in HTML comments are ignored.
 
 | ID | Issue | Proof |
 |----|-------|-------|
