@@ -7,7 +7,8 @@ export function createPool(databaseUrl?: string): pg.Pool | null {
   if (!databaseUrl) return null;
   return new pg.Pool({
     connectionString: databaseUrl,
-    max: 10,
+    // 200-seat: API/gateway/worker share this cap; agents use WebSocket, not SQL.
+    max: Number(process.env.PG_POOL_MAX || 40),
     connectionTimeoutMillis: 3000,
     idleTimeoutMillis: 10_000,
     allowExitOnIdle: true,

@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { v4 as uuid } from "uuid";
 import {
   enqueuePersist,
+  flushPersist,
   ping as pingPostgres,
   postgresStatus,
   upsertCommand,
@@ -73,7 +74,7 @@ export class Store {
   events: { sessionId: string; seq: number; batchId: string; hash: string; payload: unknown; orgId: string }[] = [];
   rejections: { sessionId: string; seq: number; code: string }[] = [];
   cursors = new Map<string, number>();
-  commands = new Map<string, { id: string; sessionId: string; type: string; idempotencyKey: string; status: string; result?: unknown; orgId: string }>();
+  commands = new Map<string, { id: string; sessionId: string; type: string; idempotencyKey: string; status: string; result?: unknown; orgId: string; createdAt: number }>();
   examStream: { examId: string; seq: number; payload: unknown }[] = [];
   media = new Map<string, { id: string; orgId: string; sessionId: string; key: string; type: string; bytes: number; sha256: string; status: string; attempts: number }>();
   deadLetter: { assetId: string; reason: string }[] = [];
@@ -122,6 +123,34 @@ export class Store {
   private persist(work: () => Promise<void>) {
     if (!process.env.DATABASE_URL) return;
     enqueuePersist(work);
+  }
+
+  /** Gateway waits for this before sending ACK so commit precedes ACK. */
+  awaitDurable(): Promise<void> {
+    return flushPersist();
+  }
+
+  pendingCommands(sessionId: string) {
+    return [...this.commands.values()].filter(
+      (c) => c.sessionId === sessionId && (c.status === "accepted" || c.status === "dispatched"),
+    );
+  }
+
+  markDispatched(commandId: string) {
+    const cmd = this.commands.get(commandId);
+    if (cmd && cmd.status === "accepted") cmd.status = "dispatched";
+    return cmd;
+  }
+
+  expireStaleCommands(now = Date.now(), ttlMs = 120_000) {
+    let n = 0;
+    for (const cmd of this.commands.values()) {
+      if (cmd.status === "accepted" && now - cmd.createdAt > ttlMs) {
+        cmd.status = "expired";
+        n += 1;
+      }
+    }
+    return n;
   }
 
   createOrg(name: string, slug: string) {
@@ -416,6 +445,7 @@ export class Store {
     if (this.events.some((e) => e.batchId === batchId)) throw new ApiError("CONFLICT", "batch", 409);
     const event = { sessionId, seq, batchId, hash, payload, orgId: session.orgId };
     this.events.push(event);
+    if (this.events.length > 5000) this.events = this.events.slice(-4000);
     this.rawOutbox.push({ eventId: this.events.length, offset: this.rawOutbox.length + 1, payload });
     this.shadowScore(sessionId, seq, payload);
     const expected = (this.cursors.get(sessionId) || 0) + 1;
@@ -443,7 +473,7 @@ export class Store {
     if (type === "EXAM_END" || type === "END") session.desired = "ENDED";
     session.controlGen += 1;
     const id = uuid();
-    const cmd = { id, sessionId, type, idempotencyKey, status: "accepted", orgId: session.orgId };
+    const cmd = { id, sessionId, type, idempotencyKey, status: "accepted", orgId: session.orgId, createdAt: Date.now() };
     this.commands.set(id, cmd);
     this.appendStream(session.examId, { op: "upsert", session_id: sessionId, patch: { last_command: type, desired: session.desired } });
     this.audit.push({ orgId: ctx.orgId, actorId: ctx.userId, action: "command:" + type, payload: { sessionId, id } });
@@ -468,10 +498,11 @@ export class Store {
   appendStream(examId: string, payload: unknown) {
     const seq = this.examStream.filter((r) => r.examId === examId).length + 1;
     this.examStream.push({ examId, seq, payload });
+    if (this.examStream.length > 20_000) this.examStream = this.examStream.slice(-16_000);
     return seq;
   }
 
-  snapshot(examId: string) {
+  snapshot(examId: string, opts?: { cursor?: number; limit?: number }) {
     const sessions = [...this.sessions.values()].filter((s) => s.examId === examId).map((s) => {
       const en = this.enrollments.get(s.enrollmentId);
       return {
@@ -485,8 +516,18 @@ export class Store {
       };
     });
     sessions.sort((a, b) => Number(b.lifecycle === "BLOCKED") - Number(a.lifecycle === "BLOCKED"));
+    const cursor = Math.max(0, opts?.cursor || 0);
+    const limit = Math.min(Math.max(opts?.limit || 200, 1), 500);
+    const page = sessions.slice(cursor, cursor + limit);
     const seq = this.examStream.filter((r) => r.examId === examId).reduce((m, r) => Math.max(m, r.seq), 0);
-    return { exam_id: examId, stream_seq: seq, readiness: this.readiness(examId), sessions };
+    return {
+      exam_id: examId,
+      stream_seq: seq,
+      readiness: this.readiness(examId),
+      sessions: page,
+      next_cursor: cursor + page.length,
+      total: sessions.length,
+    };
   }
 
   deltas(examId: string, afterSeq: number) {

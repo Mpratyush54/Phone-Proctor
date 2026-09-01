@@ -23,6 +23,8 @@ const schema = z.object({
   LIVEKIT_URL: z.string().optional(),
   LIVEKIT_API_KEY: z.string().optional(),
   LIVEKIT_API_SECRET: z.string().optional(),
+  GATEWAY_MAX_CONNECTIONS: z.coerce.number().default(256),
+  COMMAND_POLL_MS: z.coerce.number().default(100),
 });
 
 export type AppConfig = z.infer<typeof schema> & { origins: string[]; production: boolean };
