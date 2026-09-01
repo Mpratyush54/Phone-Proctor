@@ -1,5 +1,16 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { v4 as uuid } from "uuid";
+import {
+  enqueuePersist,
+  ping as pingPostgres,
+  postgresStatus,
+  upsertCommand,
+  upsertEnrollment,
+  upsertEvent,
+  upsertExam,
+  upsertOrganization,
+  upsertSession,
+} from "./db/persist.js";
 
 export type Role = "invigilator" | "lead_invigilator" | "exam_admin" | "reviewer" | "platform_ops";
 
@@ -103,7 +114,14 @@ export class Store {
     this.memberships.set(this.memKey(orgId, userId), { orgId, userId });
     this.roles.push({ orgId, userId, role: "exam_admin" });
     this.roles.push({ orgId, userId, role: "lead_invigilator" });
+    this.roles.push({ orgId, userId, role: "platform_ops" });
+    this.persist(() => upsertOrganization({ id: orgId, name: "Demo Org", slug: "demo" }));
     return { orgId, userId };
+  }
+
+  private persist(work: () => Promise<void>) {
+    if (!process.env.DATABASE_URL) return;
+    enqueuePersist(work);
   }
 
   createOrg(name: string, slug: string) {
@@ -209,7 +227,10 @@ export class Store {
     this.exams.set(id, { id, orgId: ctx.orgId, code, title, status: "DRAFT", version: 1, policyId });
     this.policies.set(policyId, { id: policyId, examId: id, version: 1, body: policyBody, immutable: false });
     this.audit.push({ orgId: ctx.orgId, actorId: ctx.userId, action: "exam.create", payload: { id, code } });
-    return this.exams.get(id)!;
+    const exam = this.exams.get(id)!;
+    const policy = this.policies.get(policyId);
+    this.persist(() => upsertExam(exam, policy));
+    return exam;
   }
 
   openExam(ctx: StaffContext, examId: string) {
@@ -248,7 +269,9 @@ export class Store {
           throw new ApiError("CONFLICT", "duplicate student", 409);
         }
         const id = uuid();
-        this.enrollments.set(id, { id, orgId: ctx.orgId, examId, studentExternalId: row.student_external_id, displayName: row.display_name });
+        const enrollment = { id, orgId: ctx.orgId, examId, studentExternalId: row.student_external_id, displayName: row.display_name };
+        this.enrollments.set(id, enrollment);
+        this.persist(() => upsertEnrollment(enrollment));
         results.push({ ok: true, id, student_external_id: row.student_external_id });
       } catch (err) {
         const e = err as ApiError;
@@ -302,6 +325,7 @@ export class Store {
       this.cursors.set(sid, 0);
     }
     void fingerprint;
+    this.persist(() => upsertSession(session));
     return {
       session_id: session.id,
       device_credential_id: deviceId,
@@ -323,7 +347,25 @@ export class Store {
       expires: nowPlus(5 * 60_000),
       canRegisterAgent: false,
     });
-    return { token: raw, expires_s: 300, can_register_agent: false };
+    return { id, token: raw, expires_s: 300, can_register_agent: false };
+  }
+
+  revokePhonePairing(ctx: StaffContext, sessionId: string, deviceCredentialId?: string) {
+    this.require(ctx, "session.command");
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new ApiError("NOT_FOUND", "session", 404);
+    this.assertOrg(ctx, session.orgId);
+    for (const t of this.pairingTokens.values()) {
+      if (t.sessionId === sessionId) t.redeemed = true;
+    }
+    const revoked: string[] = [];
+    for (const d of this.devices.values()) {
+      if (d.kind !== "phone" || d.enrollmentId !== session.enrollmentId) continue;
+      if (deviceCredentialId && d.id !== deviceCredentialId) continue;
+      d.revoked = true;
+      revoked.push(d.id);
+    }
+    return { revoked: true, device_credential_ids: revoked, can_register_agent: false };
   }
 
   redeemPhonePairing(sessionId: string, pairingToken: string) {
@@ -372,12 +414,14 @@ export class Store {
       return { duplicate: true, acked_through: this.cursors.get(sessionId) || 0 };
     }
     if (this.events.some((e) => e.batchId === batchId)) throw new ApiError("CONFLICT", "batch", 409);
-    this.events.push({ sessionId, seq, batchId, hash, payload, orgId: session.orgId });
+    const event = { sessionId, seq, batchId, hash, payload, orgId: session.orgId };
+    this.events.push(event);
     this.rawOutbox.push({ eventId: this.events.length, offset: this.rawOutbox.length + 1, payload });
     this.shadowScore(sessionId, seq, payload);
     const expected = (this.cursors.get(sessionId) || 0) + 1;
     if (seq === expected) this.cursors.set(sessionId, seq);
     this.appendStream(session.examId, { op: "event", session_id: sessionId, seq });
+    this.persist(() => upsertEvent(event));
     return { duplicate: false, acked_through: this.cursors.get(sessionId) || 0 };
   }
 
@@ -401,8 +445,9 @@ export class Store {
     const id = uuid();
     const cmd = { id, sessionId, type, idempotencyKey, status: "accepted", orgId: session.orgId };
     this.commands.set(id, cmd);
-    this.appendStream(session.examId, { op: "command", session_id: sessionId, type, status: "accepted" });
+    this.appendStream(session.examId, { op: "upsert", session_id: sessionId, patch: { last_command: type, desired: session.desired } });
     this.audit.push({ orgId: ctx.orgId, actorId: ctx.userId, action: "command:" + type, payload: { sessionId, id } });
+    this.persist(() => upsertCommand({ ...cmd, body }));
     return cmd;
   }
 
@@ -413,7 +458,7 @@ export class Store {
     cmd.result = { ok, observed };
     const session = this.sessions.get(sessionId)!;
     if (ok) session.observed = observed;
-    this.appendStream(session.examId, { op: "command", session_id: sessionId, status: cmd.status });
+    this.appendStream(session.examId, { op: "upsert", session_id: sessionId, patch: { last_command_status: cmd.status, lifecycle: session.observed } });
     return cmd;
   }
 
@@ -442,7 +487,19 @@ export class Store {
   }
 
   deltas(examId: string, afterSeq: number) {
-    return this.examStream.filter((r) => r.examId === examId && r.seq > afterSeq);
+    return this.examStream
+      .filter((r) => r.examId === examId && r.seq > afterSeq)
+      .map((r) => {
+        const p = (r.payload || {}) as { op?: string; session_id?: string; patch?: Record<string, unknown>; seq?: number };
+        const op = p.op === "remove" || p.op === "heartbeat" || p.op === "event" || p.op === "upsert" ? p.op : "upsert";
+        return {
+          exam_id: examId,
+          stream_seq: r.seq,
+          op,
+          session_id: p.session_id,
+          patch: p.patch,
+        };
+      });
   }
 
   readiness(examId: string): "Incident" | "Blocked" | "Degraded" | "Ready" {
@@ -647,8 +704,9 @@ export class Store {
   }
 
   health() {
+    if (process.env.DATABASE_URL) void pingPostgres();
     return {
-      postgres: "ok",
+      postgres: postgresStatus(),
       redis: this.redisDown ? "down" : "ok",
       object: "ok",
       livekit: process.env.LIVEKIT_URL ? "ok" : "unconfigured",

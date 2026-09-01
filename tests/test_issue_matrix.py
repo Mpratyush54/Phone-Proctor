@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from agent.bootstrap import build_runtime, parse_args
 from agent.consent import Capability, ConsentGate, ConsentRecord, Readiness
 from agent.evidence import build_evidence_bundle
 from agent.live_publisher import LivePublisher
@@ -15,6 +16,7 @@ from agent.snapshots import SnapshotPublisher
 from agent.media_spool import MediaSpool
 from agent.supervisor import AgentSupervisor
 from agent.wal import EventWal
+from screen.student_shell import StudentShell
 from fusion.baselines import assert_no_leakage
 from fusion.shadow import shadow_score
 from tools.closed_loop import run_pipeline
@@ -48,6 +50,23 @@ def test_a1_a5_and_c_vertical(tmp_path, monkeypatch):
     sign_manifest(dest, key)
     assert verify_signature(dest, key) is True
     wal.close()
+
+
+def test_bootstrap_layout_supervisor_wss_and_shell(tmp_path, monkeypatch):
+    args = parse_args(["--mode", "local", "--gateway", "ws://127.0.0.1/agent"])
+    runtime = build_runtime(args, wal_path=tmp_path / "boot.sqlite")
+    try:
+        assert isinstance(runtime.supervisor, AgentSupervisor)
+        assert runtime.supervisor.may_start_ai() is False
+    finally:
+        runtime.close()
+    monkeypatch.setenv("PHONE_PROCTOR_MODE", "product")
+    with pytest.raises(PermissionError):
+        require_wss("ws://x")
+    shell = StudentShell()
+    shell.set_lifecycle("READY")
+    assert shell.lifecycle == "READY"
+    assert shell.events == ["READY"]
 
 
 def test_a2_consent_and_a4_no_guilt():
