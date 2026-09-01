@@ -117,6 +117,22 @@ def test_bootstrap_main_importable_without_cv2(tmp_path, monkeypatch):
         runtime.close()
 
 
+def test_persist_before_execute_returns_prior_result():
+    from agent.protocol.commands import CommandReceiver
+
+    calls: list = []
+
+    def execute(c):
+        calls.append(c)
+        return {"ok": True, "n": len(calls)}
+
+    recv = CommandReceiver(execute)
+    a = recv.receive({"type": "WARN", "idempotency_key": "k"})
+    b = recv.receive({"type": "WARN", "idempotency_key": "k"})
+    assert a == b
+    assert len(calls) == 1
+
+
 def test_python_c_from_agent_bootstrap_import_main():
     import os
     import subprocess

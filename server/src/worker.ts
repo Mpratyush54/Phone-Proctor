@@ -22,13 +22,7 @@ export function startWorker(store = globalStore) {
   });
 
   const timer = setInterval(() => {
-    for (const cmd of store.commands.values()) {
-      if (cmd.status === "accepted") {
-        // retry/expiry owner: worker, not gateway
-        const ageOk = true;
-        if (!ageOk) cmd.status = "expired";
-      }
-    }
+    store.expireStaleCommands();
     for (const m of store.media.values()) {
       if (m.status === "pending_verification") {
         m.attempts += 1;

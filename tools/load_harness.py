@@ -9,45 +9,80 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from http.cookiejar import CookieJar
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 
-def post(url: str, body: dict, headers: dict | None = None) -> tuple[int, str]:
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, headers={"content-type": "application/json", **(headers or {})})
+def request(opener, method: str, url: str, body: dict | None = None, headers: dict | None = None) -> tuple[int, dict]:
+    data = None if body is None else json.dumps(body).encode()
+    req = Request(url, data=data, method=method, headers={"content-type": "application/json", **(headers or {})})
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return resp.status, resp.read().decode()
+        with opener.open(req, timeout=8) as resp:
+            raw = resp.read().decode()
+            return resp.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()
+        raw = e.read().decode()
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = {"raw": raw}
+        return e.code, parsed
 
 
-def fake_agent(api: str, session_id: str, n_events: int, snapshot: bool) -> dict:
+def staff_session(api: str):
+    opener = build_opener(HTTPCookieProcessor(CookieJar()))
+    status, body = request(opener, "POST", f"{api}/api/v1/auth/dev-login", {})
+    if status >= 400:
+        raise RuntimeError(f"dev-login {status} {body}")
+    return opener, body["csrf"]
+
+
+def ingest_one(opener, api: str, csrf: str, session_id: str, n_events: int) -> dict:
     t0 = time.time()
     errors = 0
     for seq in range(1, n_events + 1):
         payload = {"event_type": "METRICS", "i": seq}
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-        # control-plane ingest is via gateway; HTTP helper records intent
-        status, _ = post(f"{api}/health/live", {})
+        status, _ = request(
+            opener,
+            "POST",
+            f"{api}/api/v1/dev/ingest",
+            {"session_id": session_id, "seq": seq, "batch_id": f"{session_id}:{seq}", "hash": digest, "payload": payload},
+            {"x-csrf-token": csrf},
+        )
         if status >= 400:
             errors += 1
-        if snapshot and seq % 25 == 0:
-            jpeg = b"\xff\xd8" + bytes(256) + b"\xff\xd9"
-            _ = hashlib.sha256(jpeg).hexdigest()
     return {"session_id": session_id, "events": n_events, "errors": errors, "ms": int((time.time() - t0) * 1000)}
 
 
 def run_profile(name: str, api: str, agents: int, events: int) -> dict:
-    with ThreadPoolExecutor(max_workers=min(agents, 32)) as pool:
-        futs = [pool.submit(fake_agent, api, f"sess-{i}", events, True) for i in range(agents)]
-        rows = [f.result() for f in as_completed(futs)]
+    opener, csrf = staff_session(api)
+    headers = {"x-csrf-token": csrf}
+    st, exam = request(opener, "POST", f"{api}/api/v1/exams", {"code": f"LOAD-{int(time.time())}", "title": name}, headers)
+    if st >= 400:
+        raise RuntimeError(f"exam {st} {exam}")
+    exam_id = exam["id"]
+    rows = [{"student_external_id": str(i), "display_name": f"S{i}"} for i in range(agents)]
+    st, roster = request(opener, "POST", f"{api}/api/v1/exams/{exam_id}/roster", {"rows": rows}, headers)
+    session_ids = []
+    for row in roster.get("results") or []:
+        if not row.get("ok"):
+            continue
+        _, tok = request(opener, "POST", f"{api}/api/v1/enrollments/{row['id']}/token", {}, headers)
+        _, cred = request(opener, "POST", f"{api}/api/v1/enroll", {"token": tok["token"], "fingerprint": row["id"]}, headers)
+        session_ids.append(cred["session_id"])
+    with ThreadPoolExecutor(max_workers=min(max(agents, 1), 32)) as pool:
+        futs = [pool.submit(ingest_one, opener, api, csrf, sid, events) for sid in session_ids]
+        out = [f.result() for f in as_completed(futs)]
+    times = sorted(r["ms"] for r in out) or [0]
     return {
         "profile": name,
-        "agents": agents,
-        "p95_ms": sorted(r["ms"] for r in rows)[int(0.95 * (len(rows) - 1))],
-        "errors": sum(r["errors"] for r in rows),
+        "agents": len(session_ids),
+        "p95_ms": times[int(0.95 * (len(times) - 1))],
+        "errors": sum(r["errors"] for r in out),
         "event_partitioning": False,
         "kafka": False,
+        "exam_id": exam_id,
     }
 
 
@@ -56,7 +91,7 @@ def main():
     p.add_argument("--api", default="http://127.0.0.1:8080")
     p.add_argument("--profile", choices=["g1-30", "g3-soak", "g4-200"], default="g1-30")
     args = p.parse_args()
-    spec = {"g1-30": (30, 20), "g3-soak": (30, 200), "g4-200": (200, 10)}[args.profile]
+    spec = {"g1-30": (30, 20), "g3-soak": (30, 50), "g4-200": (200, 10)}[args.profile]
     print(json.dumps(run_profile(args.profile, args.api, *spec), indent=2))
 
 

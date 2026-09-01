@@ -64,7 +64,7 @@ export function CommandCenter() {
       >
         Bulk warn (server receipts)
       </button>
-      <p>Grid uses snapshot then `/api/v1/console/deltas` with `stream_seq`. A gap forces resnapshot.</p>
+      <p>Grid uses snapshot then `/api/v1/console/deltas` (and optional gateway `/console` WebSocket). A gap forces resnapshot. Cells are windowed for 1,000-row exams.</p>
       <LiveGrid sessions={snap?.sessions || []} />
     </main>
   );

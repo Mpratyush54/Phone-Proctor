@@ -42,4 +42,18 @@ class CommandReceiver:
         self.execute = execute
 
     def receive(self, command: Mapping[str, Any]) -> dict[str, Any]:
-        return self.execute(dict(command))
+        from agent.storage.command_receipts import CommandReceiptStore
+
+        if not hasattr(self, "_receipts"):
+            self._receipts = CommandReceiptStore()
+        key = command.get("idempotency_key")
+        if key:
+            prior = self._receipts.get(str(key))
+            if prior and prior.get("result") is not None:
+                return prior["result"]
+            # persist receipt before side effects
+            self._receipts.put(command, result=None)
+        result = self.execute(dict(command))
+        if key:
+            self._receipts.put(command, result=result)
+        return result
