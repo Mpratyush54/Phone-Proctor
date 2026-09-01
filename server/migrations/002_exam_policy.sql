@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS exam (
   UNIQUE (org_id, code)
 );
 
+-- composite identity for tenant FKs (must exist before policy_version FK)
+CREATE UNIQUE INDEX IF NOT EXISTS exam_org_id_idx ON exam(org_id, id);
+
 CREATE TABLE IF NOT EXISTS policy_version (
   id UUID PRIMARY KEY,
   org_id UUID NOT NULL REFERENCES organization(id),
@@ -21,10 +24,6 @@ CREATE TABLE IF NOT EXISTS policy_version (
   UNIQUE (exam_id, version),
   FOREIGN KEY (org_id, exam_id) REFERENCES exam(org_id, id)
 );
-
-ALTER TABLE exam ADD COLUMN IF NOT EXISTS org_id UUID;
--- composite identity for FKs
-CREATE UNIQUE INDEX IF NOT EXISTS exam_org_id_idx ON exam(org_id, id);
 
 CREATE TABLE IF NOT EXISTS candidate_group (
   id UUID PRIMARY KEY,

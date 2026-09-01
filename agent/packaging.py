@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import hashlib
 import json
 import shutil
@@ -76,3 +77,20 @@ def rollback_release(current: Path, previous: Path) -> None:
             shutil.rmtree(backup)
         current.rename(backup)
     shutil.copytree(previous, current)
+
+
+def sign_manifest(manifest_path: Path, key: bytes) -> Path:
+    body = manifest_path.read_bytes()
+    sig = hmac.new(key, body, hashlib.sha256).hexdigest()
+    dest = manifest_path.with_suffix(manifest_path.suffix + ".sig")
+    dest.write_text(sig, encoding="utf-8")
+    return dest
+
+
+def verify_signature(manifest_path: Path, key: bytes) -> bool:
+    sig_path = manifest_path.with_suffix(manifest_path.suffix + ".sig")
+    if not sig_path.exists():
+        raise FileNotFoundError("missing signature")
+    expected = hmac.new(key, manifest_path.read_bytes(), hashlib.sha256).hexdigest()
+    got = sig_path.read_text(encoding="utf-8").strip()
+    return hmac.compare_digest(expected, got)

@@ -1,21 +1,42 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cookieParser from "cookie-parser";
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes, createHash, randomUUID } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { ApiError, Store, type StaffContext } from "./store.js";
 import type { AppConfig } from "./config.js";
 import { createLogger, requestId } from "./log.js";
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 const OPENAPI = {
   openapi: "3.1.0",
   info: { title: "Phone-Proctor Control API", version: "1.0.0" },
+  servers: [{ url: "http://127.0.0.1:8080" }],
   paths: {
-    "/api/v1/exams": { get: {}, post: {} },
-    "/api/v1/exams/{id}/roster": { post: {} },
-    "/api/v1/sessions/{id}/commands": { post: {} },
-    "/api/v1/console/snapshot": { get: {} },
+    "/api/v1/auth/login": { get: { summary: "Start OIDC" } },
+    "/api/v1/auth/callback": { get: { summary: "OIDC callback" } },
+    "/api/v1/auth/logout": { post: { summary: "Logout" } },
+    "/api/v1/auth/step-up": { post: { summary: "OIDC step-up proof" } },
+    "/api/v1/me": { get: { summary: "Current staff" } },
+    "/api/v1/exams": { get: { summary: "List exams" }, post: { summary: "Create exam" } },
+    "/api/v1/exams/{id}/open": { post: { summary: "Open exam" } },
+    "/api/v1/exams/{id}/policy": { patch: { summary: "Update policy" } },
+    "/api/v1/exams/{id}/roster": { post: { summary: "Import roster" } },
+    "/api/v1/exams/{id}/staff": { post: { summary: "Assign staff" } },
+    "/api/v1/exams/{id}/readiness": { get: { summary: "Readiness summary" } },
+    "/api/v1/exams/{id}/commands/bulk": { post: { summary: "Bulk commands" } },
+    "/api/v1/enrollments/{id}/token": { post: { summary: "Issue enrollment token" } },
+    "/api/v1/enroll": { post: { summary: "Redeem enrollment" } },
+    "/api/v1/sessions/{id}": { get: { summary: "Student drawer" } },
+    "/api/v1/sessions/{id}/commands": { post: { summary: "Dispatch command" } },
+    "/api/v1/sessions/{id}/claim": { post: { summary: "Claim lease" } },
+    "/api/v1/sessions/{id}/handoff": { post: { summary: "Handoff lease" } },
+    "/api/v1/sessions/{id}/pairing-token": { post: { summary: "Phone pairing token" } },
+    "/api/v1/sessions/{id}/phone-pair": { post: { summary: "Redeem phone pairing" } },
+    "/api/v1/console/snapshot": { get: { summary: "Console snapshot" } },
+    "/api/v1/console/deltas": { get: { summary: "Console deltas after stream_seq" } },
+    "/health/live": { get: { summary: "Liveness" } },
+    "/health/ready": { get: { summary: "Readiness" } },
+    "/metrics": { get: { summary: "Prometheus metrics" } },
   },
 };
 
@@ -256,10 +277,47 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     res.json({ alias: req.params.alias, version: req.body.version });
   });
 
-  app.get("/api/v1/platform/health", (req, res) => {
+  app.post("/api/v1/exams/:id/staff", (req, res) => {
+    res.json(store.assignStaff(staffFrom(req), req.params.id, req.body.user_id, req.body.role || "invigilator"));
+  });
+
+  app.post("/api/v1/exams/:id/commands/bulk", (req, res) => {
+    const ids = Array.isArray(req.body.session_ids) ? req.body.session_ids : [];
+    res.json(store.bulkCommands(staffFrom(req), ids, req.body.type, req.body.idempotency_key || randomUUID()));
+  });
+
+  app.post("/api/v1/sessions/:id/legal-hold", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "exam.end");
+    store.freezeLegalHold(req.params.id);
+    res.json({ ok: true, hold: true });
+  });
+
+  app.get("/api/v1/media/inventory", (req, res) => {
     const ctx = staffFrom(req);
     store.require(ctx, "platform.ops");
-    res.json({ tenant_blind: true, ...store.health(), capacity: { exams: store.exams.size, sessions: store.sessions.size } });
+    res.json(store.reconcileInventory());
+  });
+
+  app.post("/api/v1/sessions/:id/live/start", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "session.live_view");
+    res.json(store.startLive(req.params.id, ctx.userId));
+  });
+
+  app.post("/api/v1/sessions/:id/live/stop", (req, res) => {
+    const ctx = staffFrom(req);
+    res.json(store.stopLive(req.params.id, ctx.userId));
+  });
+
+  app.get("/api/v1/health/aggregate", (_req, res) => {
+    res.json(store.pollHealth());
+  });
+
+  app.get("/api/v1/platform/view", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "platform.ops");
+    res.json(store.platformView());
   });
 
   app.get("/metrics", (_req, res) => {

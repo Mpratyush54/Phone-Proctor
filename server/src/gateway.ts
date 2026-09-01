@@ -7,7 +7,7 @@ import { rejectUnknownMajor } from "./contracts.js";
 
 const RATE = new Map<WebSocket, { n: number; t: number }>();
 
-export function startGateway(store = globalStore) {
+export function startGateway(store = globalStore, opts?: { listen?: boolean; port?: number; host?: string }) {
   const cfg = loadConfig();
   const log = createLogger("gateway", cfg.LOG_LEVEL);
   if (cfg.production) {
@@ -114,8 +114,11 @@ export function startGateway(store = globalStore) {
       }
     });
   });
-  server.listen(cfg.GATEWAY_PORT, cfg.GATEWAY_HOST, () => {
-    log.info({ host: cfg.GATEWAY_HOST, port: cfg.GATEWAY_PORT }, "gateway listening");
+  if (opts?.listen === false) return server;
+  const port = opts?.port ?? cfg.GATEWAY_PORT;
+  const host = opts?.host ?? cfg.GATEWAY_HOST;
+  server.listen(port, host, () => {
+    log.info({ host, port }, "gateway listening");
   });
   return server;
 }

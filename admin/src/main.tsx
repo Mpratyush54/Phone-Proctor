@@ -130,6 +130,18 @@ function Exam({ id }: { id: string }) {
       >
         Import
       </button>
+      <button
+        onClick={async () => {
+          const ids = (snap?.sessions || []).map((s) => s.session_id);
+          const r = await api(`/api/v1/exams/${id}/commands/bulk`, {
+            method: "POST",
+            body: JSON.stringify({ session_ids: ids, type: "WARN", idempotency_key: crypto.randomUUID() }),
+          });
+          alert(JSON.stringify(r));
+        }}
+      >
+        Bulk warn (server receipts)
+      </button>
       <h2>Live grid</h2>
       <div className="grid">
         {(snap?.sessions || []).map((s) => (

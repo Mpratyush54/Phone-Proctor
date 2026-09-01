@@ -77,6 +77,15 @@ export class Store {
   leases = new Map<string, { owner: string; until: number }>();
   presence = new Map<string, { online: boolean; ts: number }>();
   legalHold = new Set<string>();
+  pairingTokens = new Map<string, { sessionId: string; hash: string; expires: number; redeemed?: boolean; canRegisterAgent: false }>();
+  staffAssignments: { examId: string; userId: string; role: string }[] = [];
+  shadows: { sessionId: string; seq: number; scores: unknown }[] = [];
+  windows: { sessionId: string; start: number; features: Record<string, number> }[] = [];
+  inventory: { keys: string[]; missing: string[] } = { keys: [], missing: [] };
+  healthSnap: { ts: number; checks: Record<string, string> } | null = null;
+  liveViewers = new Map<string, Set<string>>();
+  eventPartitioning = false;
+  kafkaEnabled = false;
 
   constructor(pepper = "dev-pepper") {
     this.pepper = pepper;
@@ -301,26 +310,39 @@ export class Store {
     };
   }
 
-  redeemPhonePairing(sessionId: string, pairingToken: string) {
-    const hash = pepperHash(pairingToken, this.pepper);
-    const tok = [...this.tokens.values()].find((t) => t.hash === hash);
-    if (!tok) throw new ApiError("AUTH_DENIED", "bad pairing token", 401);
-    if (tok.redeemed) throw new ApiError("CONFLICT", "replay", 409);
-    if (Date.now() > tok.expires) throw new ApiError("AUTH_DENIED", "expired", 401);
-    const session = this.sessions.get(sessionId);
-    if (!session || session.enrollmentId !== tok.enrollmentId) throw new ApiError("AUTH_DENIED", "session mismatch", 401);
-    tok.redeemed = true;
-    return this.redeemEnrollment(pairingToken, "phone-fp", "phone");
-  }
-
   issuePairingToken(ctx: StaffContext, sessionId: string) {
     this.require(ctx, "session.command");
     const session = this.sessions.get(sessionId);
     if (!session) throw new ApiError("NOT_FOUND", "session", 404);
+    this.assertOrg(ctx, session.orgId);
     const raw = randomBytes(16).toString("hex");
     const id = uuid();
-    this.tokens.set(id, { id, enrollmentId: session.enrollmentId, hash: pepperHash(raw, this.pepper), expires: nowPlus(5 * 60_000) });
-    return { token: raw, expires_s: 300 };
+    this.pairingTokens.set(id, {
+      sessionId,
+      hash: pepperHash(raw, this.pepper),
+      expires: nowPlus(5 * 60_000),
+      canRegisterAgent: false,
+    });
+    return { token: raw, expires_s: 300, can_register_agent: false };
+  }
+
+  redeemPhonePairing(sessionId: string, pairingToken: string) {
+    const hash = pepperHash(pairingToken, this.pepper);
+    const tok = [...this.pairingTokens.values()].find((t) => t.hash === hash);
+    if (!tok) throw new ApiError("AUTH_DENIED", "bad pairing token", 401);
+    if (tok.redeemed) throw new ApiError("CONFLICT", "replay", 409);
+    if (Date.now() > tok.expires) throw new ApiError("AUTH_DENIED", "expired", 401);
+    if (tok.sessionId !== sessionId) throw new ApiError("AUTH_DENIED", "session mismatch", 401);
+    if (tok.canRegisterAgent) throw new ApiError("AUTH_DENIED", "pairing cannot register agent", 401);
+    tok.redeemed = true;
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new ApiError("NOT_FOUND", "session", 404);
+    const deviceId = uuid();
+    const familyId = uuid();
+    this.devices.set(deviceId, { id: deviceId, enrollmentId: session.enrollmentId, kind: "phone", familyId });
+    const refresh = randomBytes(16).toString("hex");
+    this.refreshTokens.set(familyId, { hash: pepperHash(refresh, this.pepper), familyId });
+    return { session_id: sessionId, device_credential_id: deviceId, refresh_token: refresh, kind: "phone", can_register_agent: false };
   }
 
   rotateRefresh(familyId: string, presented: string) {
@@ -352,6 +374,7 @@ export class Store {
     if (this.events.some((e) => e.batchId === batchId)) throw new ApiError("CONFLICT", "batch", 409);
     this.events.push({ sessionId, seq, batchId, hash, payload, orgId: session.orgId });
     this.rawOutbox.push({ eventId: this.events.length, offset: this.rawOutbox.length + 1, payload });
+    this.shadowScore(sessionId, seq, payload);
     const expected = (this.cursors.get(sessionId) || 0) + 1;
     if (seq === expected) this.cursors.set(sessionId, seq);
     this.appendStream(session.examId, { op: "event", session_id: sessionId, seq });
@@ -524,12 +547,124 @@ export class Store {
     this.modelRegistry.set(alias, { version, body });
   }
 
+  assignStaff(ctx: StaffContext, examId: string, userId: string, role: string) {
+    this.require(ctx, "exam.write");
+    const exam = this.exams.get(examId);
+    if (!exam) throw new ApiError("NOT_FOUND", "exam", 404);
+    this.assertOrg(ctx, exam.orgId);
+    if (!this.memberships.has(this.memKey(exam.orgId, userId))) throw new ApiError("TENANT_DENIED", "staff not in org", 403);
+    this.staffAssignments.push({ examId, userId, role });
+    return { examId, userId, role };
+  }
+
+  bulkCommands(ctx: StaffContext, sessionIds: string[], type: string, idempotencyKey: string) {
+    const results = sessionIds.map((id, i) => {
+      try {
+        const cmd = this.acceptCommand(ctx, id, type, `${idempotencyKey}:${i}`, {});
+        return { session_id: id, ok: true, status: cmd.status, replay: !!(cmd as { replay?: boolean }).replay, command_id: cmd.id };
+      } catch (err) {
+        const e = err as ApiError;
+        return { session_id: id, ok: false, error: e.code || "UNAVAILABLE" };
+      }
+    });
+    return { results, all_ok: results.every((r) => r.ok) };
+  }
+
+  shadowScore(sessionId: string, seq: number, payload: unknown) {
+    try {
+      const p = (payload || {}) as Record<string, number>;
+      const scores = {
+        look_away: Number(Math.abs(p.gaze_h || 0) > 0.45),
+        multi_face: Number((p.face_count || 1) > 1),
+      };
+      this.shadows.push({ sessionId, seq, scores });
+      return scores;
+    } catch {
+      return null;
+    }
+  }
+
+  windowFeatures(sessionId: string, events: { t: number; gaze_h?: number; face_count?: number }[]) {
+    const stride = 5;
+    const win = 10;
+    const out = [];
+    for (let start = 0; start <= 60 - win; start += stride) {
+      const slice = events.filter((e) => e.t >= start && e.t < start + win);
+      const features = {
+        gaze_h_mean: slice.length ? slice.reduce((a, e) => a + (e.gaze_h || 0), 0) / slice.length : 0,
+        face_count_max: slice.reduce((a, e) => Math.max(a, e.face_count || 0), 0),
+      };
+      if ("fused_score" in features) throw new Error("leakage");
+      this.windows.push({ sessionId, start, features });
+      out.push({ start, features });
+    }
+    return out;
+  }
+
+  freezeLegalHold(sessionId: string) {
+    this.legalHold.add(sessionId);
+    const man = [...this.manifests.values()].find((m) => m.sessionId === sessionId);
+    if (man) man.frozen = true;
+    else this.manifests.set(sessionId, { id: sessionId, sessionId, frozen: true, body: {} });
+  }
+
+  retainOrDiscard(sessionId: string, now = Date.now(), retainMs = 90 * 86400_000) {
+    if (this.legalHold.has(sessionId)) return { action: "hold" };
+    const session = this.sessions.get(sessionId);
+    if (!session) return { action: "missing" };
+    return { action: "retain", until: now + retainMs };
+  }
+
+  reconcileInventory() {
+    const keys = [...this.media.values()].map((m) => m.key);
+    this.inventory = { keys, missing: [] };
+    return this.inventory;
+  }
+
+  stopLive(sessionId: string, viewerId: string) {
+    const set = this.liveViewers.get(sessionId) || new Set();
+    set.delete(viewerId);
+    this.liveViewers.set(sessionId, set);
+    if (set.size === 0) {
+      this.audit.push({ orgId: this.sessions.get(sessionId)?.orgId || "", action: "STOP_LIVE", payload: { sessionId } });
+      return { stopped: true };
+    }
+    return { stopped: false, remaining: set.size };
+  }
+
+  startLive(sessionId: string, viewerId: string) {
+    const set = this.liveViewers.get(sessionId) || new Set();
+    set.add(viewerId);
+    this.liveViewers.set(sessionId, set);
+    this.audit.push({ orgId: this.sessions.get(sessionId)?.orgId || "", action: "START_LIVE", payload: { sessionId, viewerId } });
+    return { viewers: set.size };
+  }
+
+  pollHealth() {
+    const checks = this.health();
+    this.healthSnap = { ts: Date.now(), checks };
+    return { ...checks, redis_ttl_s: 30, source: this.redisDown ? "postgres" : "redis" };
+  }
+
   health() {
     return {
       postgres: "ok",
       redis: this.redisDown ? "down" : "ok",
       object: "ok",
       livekit: process.env.LIVEKIT_URL ? "ok" : "unconfigured",
+      fanout: this.redisDown ? "degraded" : "ok",
+    };
+  }
+
+  platformView() {
+    return {
+      tenant_blind: true,
+      exams: this.exams.size,
+      sessions: this.sessions.size,
+      agents_online: [...this.presence.values()].filter((p) => p.online).length,
+      event_partitioning: this.eventPartitioning,
+      kafka: this.kafkaEnabled,
+      checks: this.pollHealth(),
     };
   }
 }

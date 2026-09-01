@@ -28,9 +28,9 @@ CREATE TABLE IF NOT EXISTS org_role_assignment (
   org_id UUID NOT NULL,
   user_id UUID NOT NULL,
   role TEXT NOT NULL,
-  exam_id UUID,
-  group_id UUID,
-  PRIMARY KEY (org_id, user_id, role, COALESCE(exam_id, '00000000-0000-0000-0000-000000000000'), COALESCE(group_id, '00000000-0000-0000-0000-000000000000')),
+  exam_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+  group_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+  PRIMARY KEY (org_id, user_id, role, exam_id, group_id),
   FOREIGN KEY (org_id, user_id) REFERENCES organization_membership(org_id, user_id)
 );
 

@@ -60,6 +60,20 @@ def test_install_update_and_rollback(tmp_path):
     assert (current / "app").read_text() == "1"
 
 
+def test_signed_release_hmac(tmp_path):
+    root = tmp_path / "pkg"
+    root.mkdir()
+    (root / "app").write_text("bin", encoding="utf-8")
+    dest = tmp_path / "integrity-manifest.json"
+    write_manifest(dest=dest, root=root)
+    from agent.packaging import sign_manifest, verify_signature
+    key = b"release-key"
+    sign_manifest(dest, key)
+    assert verify_signature(dest, key) is True
+    dest.write_text(dest.read_text() + " ", encoding="utf-8")
+    assert verify_signature(dest, key) is False
+
+
 def test_rollback_without_previous_denied(tmp_path):
     with pytest.raises(FileNotFoundError):
         rollback_release(tmp_path / "cur", tmp_path / "missing")
