@@ -1,0 +1,30 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/command.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Command",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "type", "payload"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "const": "command" },
+    "msg_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" },
+    "payload": {
+      "type": "object",
+      "required": ["command_id", "command_type", "idempotency_key"],
+      "additionalProperties": true,
+      "properties": {
+        "command_id": { "type": "string" },
+        "command_type": {
+          "type": "string",
+          "enum": ["EXAM_START", "EXAM_PAUSE", "EXAM_RESUME", "EXAM_END", "WARN", "REQUEST_CLIP", "UPDATE_POLICY", "KICK", "STOP_LIVE"]
+        },
+        "idempotency_key": { "type": "string" },
+        "control_generation": { "type": "integer" },
+        "body": { "type": "object" }
+      }
+    }
+  }
+}

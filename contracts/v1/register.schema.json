@@ -1,0 +1,24 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/register.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Register",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "type", "msg_id", "ts", "payload"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "const": "register" },
+    "msg_id": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["enrollment_token", "device_fingerprint"],
+      "properties": {
+        "enrollment_token": { "type": "string", "minLength": 8 },
+        "device_fingerprint": { "type": "string", "description": "Diagnostic only, never authentication" },
+        "platform": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/policy.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Policy",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "policy_id", "version"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "const": "policy" },
+    "policy_id": { "type": "string" },
+    "version": { "type": "integer", "minimum": 1 },
+    "immutable": { "type": "boolean" },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "microphone": { "type": "boolean" },
+        "screen": { "type": "boolean" },
+        "keystrokes": { "type": "boolean" },
+        "camera": { "type": "boolean" },
+        "network_monitor": { "type": "boolean" },
+        "phone_evidence": { "type": "boolean" }
+      }
+    }
+  }
+}
