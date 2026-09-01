@@ -1,0 +1,14 @@
+{
+  "states": ["NEW", "ENROLLING", "PRECHECK", "READY", "DEGRADED", "IN_EXAM", "PAUSED", "BLOCKED", "ENDED"],
+  "transitions": {
+    "NEW": ["ENROLLING", "BLOCKED"],
+    "ENROLLING": ["PRECHECK", "BLOCKED"],
+    "PRECHECK": ["READY", "DEGRADED", "BLOCKED"],
+    "READY": ["IN_EXAM", "BLOCKED", "ENDED"],
+    "DEGRADED": ["IN_EXAM", "READY", "BLOCKED", "ENDED"],
+    "IN_EXAM": ["PAUSED", "ENDED", "BLOCKED"],
+    "PAUSED": ["IN_EXAM", "ENDED", "BLOCKED"],
+    "BLOCKED": ["ENDED"],
+    "ENDED": []
+  }
+}

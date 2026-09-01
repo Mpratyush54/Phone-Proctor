@@ -447,7 +447,10 @@ export class Store {
     this.commands.set(id, cmd);
     this.appendStream(session.examId, { op: "upsert", session_id: sessionId, patch: { last_command: type, desired: session.desired } });
     this.audit.push({ orgId: ctx.orgId, actorId: ctx.userId, action: "command:" + type, payload: { sessionId, id } });
-    this.persist(() => upsertCommand({ ...cmd, body }));
+    this.persist(async () => {
+      await upsertSession(session);
+      await upsertCommand({ ...cmd, body });
+    });
     return cmd;
   }
 

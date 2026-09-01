@@ -46,6 +46,10 @@ export function enqueuePersist(work: () => Promise<void>): void {
     });
 }
 
+export function flushPersist(): Promise<void> {
+  return persistChain;
+}
+
 async function withOrg<T>(orgId: string, fn: (client: PoolClient) => Promise<T>): Promise<T | undefined> {
   const pool = getPool();
   if (!pool) return undefined;
@@ -174,7 +178,7 @@ export async function upsertEvent(row: {
     await c.query(
       `INSERT INTO event (org_id, session_id, seq_no, batch_id, payload_hash, payload)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-       ON CONFLICT (session_id, seq_no) DO NOTHING`,
+       ON CONFLICT DO NOTHING`,
       [row.orgId, row.sessionId, row.seq, row.batchId, row.hash, JSON.stringify(row.payload ?? {})],
     );
   });

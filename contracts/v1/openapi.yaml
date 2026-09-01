@@ -1,0 +1,1057 @@
+openapi: 3.1.0
+info:
+  title: Phone-Proctor Control API
+  version: "1.0.0"
+  description: |
+    Canonical REST contract for the v1 control plane. Paths match
+    `server/src/app.ts`. Agent WebSocket messages are defined by the JSON
+    Schemas alongside this file (envelope, hello, resume, heartbeat, event,
+    ack, nack, command, command-result). Console snapshots and deltas share an
+    exam stream cursor (`stream_seq`).
+servers:
+  - url: http://127.0.0.1:8080
+tags:
+  - name: Auth
+  - name: Exams
+  - name: Enrollments
+  - name: Sessions
+  - name: Console
+  - name: Media
+  - name: Findings
+  - name: Health
+  - name: Platform
+security:
+  - staffCookie: []
+paths:
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Liveness
+      security: []
+      operationId: healthLive
+      responses:
+        "200":
+          description: Process is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthLive"
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness
+      security: []
+      operationId: healthReady
+      responses:
+        "200":
+          description: Dependency checks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthReady"
+  /metrics:
+    get:
+      tags: [Health]
+      summary: Prometheus metrics
+      security: []
+      operationId: metrics
+      responses:
+        "200":
+          description: Prometheus text
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/v1/openapi.json:
+    get:
+      tags: [Platform]
+      summary: OpenAPI document
+      security: []
+      operationId: openapiJson
+      responses:
+        "200":
+          description: OpenAPI 3.1 document
+  /api/v1/auth/login:
+    get:
+      tags: [Auth]
+      summary: Start OIDC
+      security: []
+      operationId: authLogin
+      responses:
+        "200":
+          description: Authorization URL and state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, state]
+                properties:
+                  url: { type: string }
+                  state: { type: string }
+  /api/v1/auth/callback:
+    get:
+      tags: [Auth]
+      summary: OIDC callback
+      security: []
+      operationId: authCallback
+      parameters:
+        - in: query
+          name: state
+          schema: { type: string }
+        - in: query
+          name: nonce
+          schema: { type: string }
+      responses:
+        "200":
+          description: Staff session established
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          $ref: "#/components/responses/Error"
+  /api/v1/auth/dev-login:
+    post:
+      tags: [Auth]
+      summary: Development login (disabled in production)
+      security: []
+      operationId: authDevLogin
+      responses:
+        "200":
+          description: Staff session established
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          $ref: "#/components/responses/Error"
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout
+      operationId: authLogout
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      responses:
+        "200":
+          description: Session cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+  /api/v1/auth/step-up:
+    post:
+      tags: [Auth]
+      summary: OIDC step-up proof
+      operationId: authStepUp
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      responses:
+        "200":
+          description: Recent-auth proof recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  acr: { type: string }
+        "401":
+          $ref: "#/components/responses/Error"
+  /api/v1/me:
+    get:
+      tags: [Auth]
+      summary: Current staff
+      operationId: me
+      responses:
+        "200":
+          description: Authenticated staff
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffMe"
+        "401":
+          $ref: "#/components/responses/Error"
+  /api/v1/exams:
+    get:
+      tags: [Exams]
+      summary: List exams
+      operationId: listExams
+      parameters:
+        - in: query
+          name: cursor
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Page of exams
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExamList"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [Exams]
+      summary: Create exam
+      operationId: createExam
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, title]
+              properties:
+                code: { type: string }
+                title: { type: string }
+                policy: { type: object, additionalProperties: true }
+      responses:
+        "201":
+          description: Exam created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Exam"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/v1/exams/{id}/open:
+    post:
+      tags: [Exams]
+      summary: Open exam
+      operationId: openExam
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Exam opened; policy becomes immutable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Exam"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/v1/exams/{id}/policy:
+    patch:
+      tags: [Exams]
+      summary: Update policy
+      operationId: updatePolicy
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: ./policy.schema.json
+      responses:
+        "200":
+          description: Policy record
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/v1/exams/{id}/roster:
+    post:
+      tags: [Enrollments]
+      summary: Import roster
+      operationId: importRoster
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rows:
+                  type: array
+                  items:
+                    type: object
+                    required: [student_external_id, display_name]
+                    properties:
+                      student_external_id: { type: string }
+                      display_name: { type: string }
+      responses:
+        "200":
+          description: Per-row results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ok: { type: boolean }
+                        id: { type: string }
+                        student_external_id: { type: string }
+                        error: { type: string }
+  /api/v1/exams/{id}/staff:
+    post:
+      tags: [Exams]
+      summary: Assign staff
+      operationId: assignStaff
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: string }
+                role: { type: string }
+      responses:
+        "200":
+          description: Assignment
+        default:
+          $ref: "#/components/responses/Error"
+  /api/v1/exams/{id}/readiness:
+    get:
+      tags: [Exams]
+      summary: Readiness summary
+      operationId: examReadiness
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Rollup
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exam_id: { type: string }
+                  readiness:
+                    type: string
+                    enum: [Incident, Blocked, Degraded, Ready]
+                  causes:
+                    type: array
+                    items: { type: object }
+  /api/v1/exams/{id}/commands/bulk:
+    post:
+      tags: [Sessions]
+      summary: Bulk commands
+      operationId: bulkCommands
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                session_ids:
+                  type: array
+                  items: { type: string }
+                type: { type: string }
+                idempotency_key: { type: string }
+      responses:
+        "200":
+          description: Per-session results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results: { type: array, items: { type: object } }
+                  all_ok: { type: boolean }
+  /api/v1/enrollments/{id}/token:
+    post:
+      tags: [Enrollments]
+      summary: Issue enrollment token
+      operationId: issueEnrollmentToken
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: One-time token (peppered hash stored server-side)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  token: { type: string }
+  /api/v1/enroll:
+    post:
+      tags: [Enrollments]
+      summary: Redeem enrollment
+      security: []
+      operationId: redeemEnrollment
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+                fingerprint: { type: string, description: Diagnostic only, never authentication }
+                kind: { type: string, enum: [laptop, phone] }
+      responses:
+        "200":
+          description: Device credential issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollmentRedeem"
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/v1/sessions/{id}:
+    get:
+      tags: [Sessions]
+      summary: Student drawer
+      operationId: getSession
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Session, recent events, commands, health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDrawer"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/v1/sessions/{id}/commands:
+    post:
+      tags: [Sessions]
+      summary: Dispatch command
+      operationId: dispatchCommand
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, idempotency_key]
+              properties:
+                type:
+                  type: string
+                  enum: [EXAM_START, EXAM_PAUSE, EXAM_RESUME, EXAM_END, WARN, REQUEST_CLIP, UPDATE_POLICY, KICK, STOP_LIVE]
+                idempotency_key: { type: string }
+                body: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Accepted or idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptedCommand"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/v1/sessions/{id}/claim:
+    post:
+      tags: [Sessions]
+      summary: Claim lease
+      operationId: claimSession
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Claimed session
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/v1/sessions/{id}/handoff:
+    post:
+      tags: [Sessions]
+      summary: Handoff lease
+      operationId: handoffSession
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                to_user_id: { type: string }
+      responses:
+        "200":
+          description: Handoff recorded
+  /api/v1/sessions/{id}/pairing-token:
+    post:
+      tags: [Sessions]
+      summary: Phone pairing token
+      operationId: issuePairingToken
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Short-lived pairing token; cannot register laptop agent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  token: { type: string }
+                  expires_s: { type: integer }
+                  can_register_agent: { type: boolean, const: false }
+  /api/v1/sessions/{id}/phone-pair:
+    post:
+      tags: [Sessions]
+      summary: Redeem phone pairing
+      security: []
+      operationId: redeemPhonePair
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Phone device credential
+        default:
+          $ref: "#/components/responses/Error"
+  /api/v1/sessions/{id}/phone-pair/revoke:
+    post:
+      tags: [Sessions]
+      summary: Revoke phone pairing credential
+      operationId: revokePhonePair
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                device_credential_id: { type: string }
+      responses:
+        "200":
+          description: Revoked
+  /api/v1/console/snapshot:
+    get:
+      tags: [Console]
+      summary: Console snapshot
+      operationId: consoleSnapshot
+      parameters:
+        - in: query
+          name: exam_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Full grid at stream_seq
+          content:
+            application/json:
+              schema:
+                $ref: ./console-snapshot.schema.json
+  /api/v1/console/deltas:
+    get:
+      tags: [Console]
+      summary: Console deltas after stream_seq
+      operationId: consoleDeltas
+      parameters:
+        - in: query
+          name: exam_id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: after_seq
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Ordered deltas; a gap requires a new snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: ./console-delta.schema.json
+  /api/v1/sessions/{id}/media/uploads:
+    post:
+      tags: [Media]
+      summary: Constrained media upload
+      operationId: presignMediaUpload
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content_type: { type: string }
+                bytes: { type: integer }
+                sha256: { type: string, minLength: 64, maxLength: 64 }
+                kind: { type: string, enum: [snapshot, thumbnail, evidence, ring] }
+      responses:
+        "200":
+          description: Presigned object URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  asset_id: { type: string }
+                  object_key: { type: string }
+                  url: { type: string }
+                  expires_s: { type: integer }
+  /api/v1/media/{id}/verify:
+    post:
+      tags: [Media]
+      summary: Verify uploaded object
+      operationId: verifyMedia
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                head_ok: { type: boolean }
+                sha256: { type: string }
+                decodable: { type: boolean }
+      responses:
+        "200":
+          description: Asset status (verified or quarantined)
+  /api/v1/sessions/{id}/thumbnail:
+    get:
+      tags: [Media]
+      summary: Short-lived thumbnail
+      operationId: sessionThumbnail
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Signed thumbnail or unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available: { type: boolean }
+                  url: { type: string }
+                  expires_s: { type: integer }
+  /api/v1/sessions/{id}/livekit:
+    post:
+      tags: [Media]
+      summary: LiveKit token
+      operationId: livekitToken
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [publish, subscribe] }
+      responses:
+        "200":
+          description: Room token
+        "507":
+          $ref: "#/components/responses/Error"
+  /api/v1/sessions/{id}/live/start:
+    post:
+      tags: [Media]
+      summary: Start live publish
+      operationId: liveStart
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Viewer registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  viewers: { type: integer }
+  /api/v1/sessions/{id}/live/stop:
+    post:
+      tags: [Media]
+      summary: Stop live when last viewer leaves
+      operationId: liveStop
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Remaining viewers or STOP_LIVE
+  /api/v1/sessions/{id}/legal-hold:
+    post:
+      tags: [Media]
+      summary: Freeze legal hold
+      operationId: legalHold
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Hold frozen
+        "403":
+          $ref: "#/components/responses/Error"
+  /api/v1/sessions/{id}/findings:
+    post:
+      tags: [Findings]
+      summary: Add finding
+      operationId: addFinding
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string }
+                event_seq: { type: integer }
+      responses:
+        "200":
+          description: Provisional finding
+  /api/v1/findings/{id}/reviewers:
+    post:
+      tags: [Findings]
+      summary: Assign two reviewers
+      operationId: assignReviewers
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                a: { type: string }
+                b: { type: string }
+      responses:
+        "200":
+          description: Assigned
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/findings/{id}/appeal:
+    post:
+      tags: [Findings]
+      summary: Appeal finding
+      operationId: appealFinding
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                original_reviewer_id: { type: string }
+                appeal_reviewer_id: { type: string }
+      responses:
+        "200":
+          description: Appeal created
+  /api/v1/models/{alias}:
+    put:
+      tags: [Platform]
+      summary: Model registry alias rollback
+      operationId: setModelAlias
+      security:
+        - staffCookie: []
+          csrfHeader: []
+      parameters:
+        - in: path
+          name: alias
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version: { type: string }
+                body: { type: object }
+      responses:
+        "200":
+          description: Alias updated
+  /api/v1/media/inventory:
+    get:
+      tags: [Media]
+      summary: Reconcile media inventory
+      operationId: mediaInventory
+      responses:
+        "200":
+          description: Keys vs missing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items: { type: string }
+                  missing:
+                    type: array
+                    items: { type: string }
+  /api/v1/health/aggregate:
+    get:
+      tags: [Health]
+      summary: Health aggregator
+      security: []
+      operationId: healthAggregate
+      responses:
+        "200":
+          description: Aggregated checks
+          content:
+            application/json:
+              schema:
+                $ref: ./health.schema.json
+  /api/v1/platform/view:
+    get:
+      tags: [Platform]
+      summary: Tenant-blind platform view
+      operationId: platformView
+      responses:
+        "200":
+          description: Cross-tenant ops snapshot (no PII)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant_blind: { type: boolean }
+                  exams: { type: integer }
+                  sessions: { type: integer }
+                  agents_online: { type: integer }
+                  event_partitioning: { type: boolean }
+                  kafka: { type: boolean }
+                  checks: { type: object }
+components:
+  securitySchemes:
+    staffCookie:
+      type: apiKey
+      in: cookie
+      name: pp_session
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: x-csrf-token
+  parameters:
+    Id:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+  responses:
+    Error:
+      description: Typed error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+  schemas:
+    ApiError:
+      type: object
+      required: [code]
+      additionalProperties: true
+      properties:
+        code:
+          type: string
+          enum:
+            - AUTH_DENIED
+            - CSRF_DENIED
+            - STEP_UP_REQUIRED
+            - TENANT_DENIED
+            - NOT_FOUND
+            - CONFLICT
+            - IDEMPOTENT_REPLAY
+            - VALIDATION
+            - RATE_LIMIT
+            - SCHEMA_REJECT
+            - DUPLICATE_SEQ
+            - HASH_MISMATCH
+            - QUOTA
+            - UNAVAILABLE
+        error: { type: string }
+    HealthLive:
+      type: object
+      properties:
+        status: { type: string, const: live }
+        service: { type: string }
+    HealthReady:
+      type: object
+      properties:
+        status: { type: string, const: ready }
+        service: { type: string }
+        checks:
+          type: object
+          additionalProperties: { type: string }
+    AuthSession:
+      type: object
+      properties:
+        ok: { type: boolean }
+        csrf: { type: string }
+        org_id: { type: string }
+    StaffMe:
+      type: object
+      properties:
+        user_id: { type: string }
+        org_id: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+        csrf: { type: string }
+    Exam:
+      type: object
+      additionalProperties: true
+      properties:
+        id: { type: string }
+        orgId: { type: string }
+        code: { type: string }
+        title: { type: string }
+        status: { type: string }
+        version: { type: integer }
+        policyId: { type: string }
+    ExamList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Exam"
+        next_cursor: { type: integer }
+    EnrollmentRedeem:
+      type: object
+      properties:
+        session_id: { type: string }
+        device_credential_id: { type: string }
+        refresh_token: { type: string }
+        family_id: { type: string }
+    SessionDrawer:
+      type: object
+      additionalProperties: true
+      properties:
+        session: { type: object }
+        commands:
+          type: array
+          items: { type: object }
+        events:
+          type: array
+          items: { type: object }
+        health: { type: object }
+    AcceptedCommand:
+      type: object
+      additionalProperties: true
+      properties:
+        id: { type: string }
+        sessionId: { type: string }
+        type: { type: string }
+        idempotencyKey: { type: string }
+        status: { type: string }
+        replay: { type: boolean }
+    ConsoleSnapshot:
+      $ref: ./console-snapshot.schema.json
+    ConsoleDelta:
+      $ref: ./console-delta.schema.json
+    Envelope:
+      $ref: ./envelope.schema.json
+    Heartbeat:
+      $ref: ./heartbeat.schema.json
+    Event:
+      $ref: ./event.schema.json
+    Ack:
+      $ref: ./ack.schema.json
+    Nack:
+      $ref: ./nack.schema.json
+    Command:
+      $ref: ./command.schema.json
+    CommandResult:
+      $ref: ./command-result.schema.json
+    MediaUpload:
+      $ref: ./media-upload.schema.json
+    Policy:
+      $ref: ./policy.schema.json
+    Health:
+      $ref: ./health.schema.json
+    Register:
+      $ref: ./register.schema.json

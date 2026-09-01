@@ -10,6 +10,7 @@ export function createPool(databaseUrl?: string): pg.Pool | null {
     max: 10,
     connectionTimeoutMillis: 3000,
     idleTimeoutMillis: 10_000,
+    allowExitOnIdle: true,
   });
 }
 

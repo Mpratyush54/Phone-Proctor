@@ -1,0 +1,26 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/media-upload.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MediaUpload",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "type", "payload"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "const": "media-upload" },
+    "msg_id": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" },
+    "payload": {
+      "type": "object",
+      "required": ["object_key", "content_type", "bytes", "sha256"],
+      "additionalProperties": true,
+      "properties": {
+        "object_key": { "type": "string" },
+        "content_type": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 52428800 },
+        "sha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "kind": { "type": "string", "enum": ["snapshot", "thumbnail", "evidence", "ring"] }
+      }
+    }
+  }
+}
