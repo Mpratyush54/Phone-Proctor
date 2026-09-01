@@ -62,6 +62,7 @@ class ProctorThread(QThread):
         # Placeholders
         self.audio_monitor = None
         self.obj_detector = None
+        self.webcam = None
         self.face_detector = None
         self.mesh_detector = None
         self.head_pose = None
@@ -140,13 +141,22 @@ class ProctorThread(QThread):
 
     def _init_ai_components(self):
         if not AI_AVAILABLE: return
+        from agent.consent import Capability
+        decision = getattr(self, "consent_decision", None)
+        def allowed(cap: Capability) -> bool:
+            if decision is None:
+                return True  # local development: capabilities start unless gated
+            return decision.may_start(cap)
         try:
             print("[THREAD] Initializing AI Components...")
             # 1. Audio
             try:
-                from ai.audio import AudioMonitor
-                self.audio_monitor = AudioMonitor(logger=self.logger)
-                self.audio_monitor.start()
+                if allowed(Capability.MICROPHONE):
+                    from ai.audio import AudioMonitor
+                    self.audio_monitor = AudioMonitor(logger=self.logger)
+                    self.audio_monitor.start()
+                else:
+                    print("[THREAD] Microphone declined — audio monitor not started")
             except Exception as e: print(f"[WARN] Audio Init: {e}")
 
             # 2. YOLO
@@ -167,8 +177,11 @@ class ProctorThread(QThread):
             self.focus_monitor = FocusMonitor()
             self.monitor_check = MonitorCheck()
             self.hw_monitor = HardwareMonitor()
-            self.net_monitor = AdvancedNetworkMonitor()
-            self.net_monitor.start_monitoring()
+            if allowed(Capability.NETWORK_MONITOR):
+                self.net_monitor = AdvancedNetworkMonitor()
+                self.net_monitor.start_monitoring()
+            else:
+                print("[THREAD] Network monitor declined — not started")
 
             # 5. Fusion / multi-modal (VISION.md Sections 6 & 7)
             self.score_fusion = ScoreFusion(thresholds=self.thresholds)
@@ -222,15 +235,21 @@ class ProctorThread(QThread):
         if not self.dev_mode:
             self._init_ai_components()
 
-        webcam = None
+        self.webcam = None
         if not self.dev_mode and AI_AVAILABLE:
-             try:
-                 webcam = Webcam() # Use custom wrapper
-                 print(f"[THREAD] Webcam Initialized: {webcam.get_signature()}")
-             except Exception as e:
-                 print(f"[THREAD] Webcam Init Failed: {e}")
-                 if self.logger:
-                     self.logger.log("ERROR", f"Webcam Init Failed: {e}")
+             from agent.consent import Capability
+             decision = getattr(self, "consent_decision", None)
+             camera_ok = decision is None or decision.may_start(Capability.CAMERA)
+             if camera_ok:
+                 try:
+                     self.webcam = Webcam() # Use custom wrapper
+                     print(f"[THREAD] Webcam Initialized: {self.webcam.get_signature()}")
+                 except Exception as e:
+                     print(f"[THREAD] Webcam Init Failed: {e}")
+                     if self.logger:
+                         self.logger.log("ERROR", f"Webcam Init Failed: {e}")
+             else:
+                 print("[THREAD] Camera declined — self.webcam not started")
         
         frame_count = 0
         
@@ -391,8 +410,8 @@ class ProctorThread(QThread):
         
                 # --- 2. Webcam & AI Proctoring Logic ---
                 frame = None
-                if webcam and webcam.is_opened():
-                    frame = webcam.read()
+                if self.webcam and self.webcam.is_opened():
+                    frame = self.webcam.read()
                 
                 # FALLBACK: Create Dummy Frame if Webcam Fails
                 if frame is None:
@@ -406,10 +425,10 @@ class ProctorThread(QThread):
                 annotated_frame = frame.copy()
                 h, w = frame.shape[:2]
                 
-                # Only run AI if webcam actually works and is not dummy
-                if webcam and webcam.is_opened():
+                # Only run AI if self.webcam actually works and is not dummy
+                if self.webcam and self.webcam.is_opened():
                      # Tamper Check
-                    if webcam.check_tampering(frame):
+                    if self.webcam.check_tampering(frame):
                              cv2.putText(annotated_frame, "TAMPERING DETECTED", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
 
                     if self.face_detector and self.mesh_detector: 
@@ -570,7 +589,7 @@ class ProctorThread(QThread):
                                     else:
                                         self.rule_engine.evaluate_look_away(False)
 
-                                    # Emit 3D Gaze Viz (combining webcam pose + phone view)
+                                    # Emit 3D Gaze Viz (combining self.webcam pose + phone view)
                                     direction = gaze_data.get('direction', 'CENTER') if gaze_data else 'CENTER'
                                     is_violation = is_head_away or is_gaze_away
                                     try:
@@ -805,7 +824,32 @@ class ProctorThread(QThread):
     def stop(self):
         self.running = False
         if self.audio_monitor:
-            self.audio_monitor.stop()
+            try:
+                self.audio_monitor.stop()
+            except Exception as e:
+                print(f"[THREAD] audio stop: {e}")
         if self.net_monitor:
-             self.net_monitor.stop_monitoring()
+            try:
+                self.net_monitor.stop_monitoring()
+            except Exception as e:
+                print(f"[THREAD] net stop: {e}")
+        obj = getattr(self, "obj_detector", None)
+        if obj and hasattr(obj, "close"):
+            try:
+                obj.close()
+            except Exception:
+                pass
+        lip = getattr(self, "lip_reader", None)
+        if lip and hasattr(lip, "close"):
+            try:
+                lip.close()
+            except Exception:
+                pass
+        cam = getattr(self, "webcam", None)
+        if cam is not None and hasattr(cam, "release"):
+            try:
+                cam.release()
+            except Exception as e:
+                print(f"[THREAD] webcam release: {e}")
+            self.webcam = None
         self.wait()

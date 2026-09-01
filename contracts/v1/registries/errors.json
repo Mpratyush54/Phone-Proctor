@@ -1,0 +1,18 @@
+{
+  "codes": {
+    "AUTH_DENIED": { "http": 401, "retry": false },
+    "CSRF_DENIED": { "http": 403, "retry": false },
+    "STEP_UP_REQUIRED": { "http": 403, "retry": true },
+    "TENANT_DENIED": { "http": 403, "retry": false },
+    "NOT_FOUND": { "http": 404, "retry": false },
+    "CONFLICT": { "http": 409, "retry": false },
+    "IDEMPOTENT_REPLAY": { "http": 200, "retry": false },
+    "VALIDATION": { "http": 400, "retry": false },
+    "RATE_LIMIT": { "http": 429, "retry": true },
+    "SCHEMA_REJECT": { "http": 400, "retry": false, "terminal": true },
+    "DUPLICATE_SEQ": { "http": 409, "retry": false },
+    "HASH_MISMATCH": { "http": 409, "retry": false, "incident": true },
+    "QUOTA": { "http": 507, "retry": true },
+    "UNAVAILABLE": { "http": 503, "retry": true }
+  }
+}

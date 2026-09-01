@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "type": "nack",
+  "payload": {
+    "seq_no": 2,
+    "code": "SCHEMA_REJECT",
+    "terminal": true
+  }
+}

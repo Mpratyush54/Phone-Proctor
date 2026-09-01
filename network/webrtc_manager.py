@@ -10,6 +10,7 @@ class WebRTCManager:
         self.frame_callback = frame_callback
         self.audio_callback = audio_callback
         self.active_pc = None
+        self._closed = False
 
     async def handle_offer(self, params):
         offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
@@ -114,7 +115,7 @@ class WebRTCManager:
     async def _handle_video_track(self, track):
         print("[WebRTC] Starting video track handler...")
         frame_count = 0
-        while True:
+        while not self._closed:
             try:
                 # print("[WebRTC] Waiting for frame...") # Too noisy
                 frame = await track.recv()
@@ -138,7 +139,7 @@ class WebRTCManager:
                 break
 
     async def _handle_audio_track(self, track):
-        while True:
+        while not self._closed:
             try:
                 frame = await track.recv()
                 # frame is an av.AudioFrame
@@ -154,6 +155,9 @@ class WebRTCManager:
                 break
 
     async def close(self):
-        coros = [pc.close() for pc in self.pcs]
-        await asyncio.gather(*coros)
+        self._closed = True
+        coros = [pc.close() for pc in list(self.pcs)]
+        if coros:
+            await asyncio.gather(*coros, return_exceptions=True)
         self.pcs.clear()
+        self.active_pc = None

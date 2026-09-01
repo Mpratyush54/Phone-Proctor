@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "type": "media-upload",
+  "payload": {
+    "object_key": "o/1.jpg",
+    "content_type": "image/jpeg",
+    "bytes": 1024,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "snapshot"
+  }
+}

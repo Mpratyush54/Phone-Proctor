@@ -1,5 +1,33 @@
 # Phone-Proctor 🎯
 
+Control-plane + laptop agent for multi-modal exam proctoring. GitHub issues #1–#66 (tracks A–G) are implemented in this tree.
+
+## Quick start
+
+Laptop agent (existing local mode):
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+Control plane (API, gateway, worker, console):
+
+```bash
+./dev.sh                          # Postgres, MinIO, Dex OIDC
+cd server && npm install && npm test && npm run api
+# other terminals:
+cd server && npm run gateway
+cd server && npm run worker
+cd admin && npm install && npm run build
+```
+
+Product mode (`PHONE_PROCTOR_MODE=product`) requires `wss://`, binds leftover LAN sockets to localhost, disables Google STT, and ignores Escape / `CMD:KILL`. Session reports are observable evidence only — never `CHEAT DETECTED`.
+
+See `docs/controller-implementation-plan.md`, `docs/feature-flags.md`, and `docs/runbooks/`.
+
+---
+
 A distributed AI-powered exam proctoring backend that ingests multi-modal data from mobile clients in real time, runs computer vision and sensor fusion analysis, and triggers automated supervision events when anomalous behavior is detected.
 
 Built as the core analysis pipeline for a phone-based proctoring system where the mobile device *is* the sensor — no dedicated webcam or hardware required.

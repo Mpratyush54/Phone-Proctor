@@ -1,0 +1,18 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: pip install jsonschema pytest numpy
+      - run: python tools/validate_contracts.py
+      - run: pytest tests/test_consent.py tests/test_supervisor.py tests/test_wal.py tests/test_packaging.py tests/test_observable_summary.py tests/test_resource_cleanup.py tests/test_product_security.py tests/test_protocol_client.py tests/test_synthetic_manifest.py tests/test_baselines.py tests/test_factorized.py tests/test_media_spool.py tests/test_paths.py -q
+      - run: cd server && npm install && npm test && npm run validate:contracts
+      - run: cd admin && npm install && npm test

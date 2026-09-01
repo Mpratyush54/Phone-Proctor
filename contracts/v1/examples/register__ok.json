@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "register",
+  "msg_id": "11111111-1111-1111-1111-111111111111",
+  "ts": "2026-01-01T00:00:00Z",
+  "payload": {
+    "enrollment_token": "tokentok",
+    "device_fingerprint": "fp"
+  }
+}
