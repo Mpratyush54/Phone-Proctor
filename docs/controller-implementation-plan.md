@@ -1,9 +1,27 @@
 # Phone-Proctor — Detailed Implementation Plan
 
-**Status:** proposed execution plan  
+**Status:** active in this repository (tracks A–G)  
 **Depends on:** `docs/controller-scale-plan.md`  
 **Target:** secure 30-candidate remote exam first; 200 and 1,000 only after measured gates  
 **Date:** 2026-08-31
+
+## Local activation
+
+Keep `python main.py` for the laptop agent. Start the control plane with Postgres:
+
+```bash
+./dev.sh                          # Postgres, MinIO, Dex (Docker) when available
+# without Docker: local Postgres on DATABASE_URL=postgres://proctor:proctor@127.0.0.1:5432/proctor
+cd server && npm install && npm run migrate && npm run api
+# other terminals:
+npm run gateway
+npm run worker
+cd ../admin && npm install && npm run dev
+```
+
+Feature flags: `PHONE_PROCTOR_MODE=local|product`, `PHONE_PROCTOR_WAIT_EXAM_START=1`, `REDIS_URL` optional until Track G.
+
+---
 
 This document translates the architecture into implementable work. It defines
 the approach, target modules, contracts, database changes, delivery sequence,

@@ -11,16 +11,22 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Control plane (API, gateway, worker, console):
+Control plane (API, gateway, worker, console). Postgres is required from the first vertical slice:
 
 ```bash
-./dev.sh                          # Postgres, MinIO, Dex OIDC
+./dev.sh                          # Docker Postgres/MinIO/Dex, or local Postgres
+export DATABASE_URL=postgres://proctor:proctor@127.0.0.1:5432/proctor
 cd server && npm install && npm test && npm run api
 # other terminals:
 cd server && npm run gateway
 cd server && npm run worker
-cd admin && npm install && npm run build
+cd admin && npm install && npm run dev
 ```
+
+The first demonstrable milestone is one authenticated controller starting one
+authenticated agent, receiving one durably acknowledged event, and ending the
+session after both processes have been restarted once
+(`docs/controller-implementation-plan.md` §17).
 
 Product mode (`PHONE_PROCTOR_MODE=product`) requires `wss://`, binds leftover LAN sockets to localhost, disables Google STT, and ignores Escape / `CMD:KILL`. Session reports are observable evidence only — never `CHEAT DETECTED`.
 
