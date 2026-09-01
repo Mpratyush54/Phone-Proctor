@@ -151,8 +151,15 @@ async function main() {
   console.log("migrate complete");
 }
 
-const invoked = process.argv[1] ? path.basename(path.resolve(process.argv[1])).startsWith("migrate") : false;
-if (invoked) {
+function isDirectRun(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  const resolved = path.resolve(entry);
+  const self = fileURLToPath(import.meta.url);
+  return resolved === self || path.basename(resolved) === "migrate.ts";
+}
+
+if (isDirectRun()) {
   main().catch((err) => {
     console.error(err);
     process.exit(1);
