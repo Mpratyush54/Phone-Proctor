@@ -97,7 +97,7 @@ function throttleKey(email: string, ip: string): string {
   return `${email.toLowerCase()}|${ip}`;
 }
 
-function loginPage(uid: string, error: string, email = ""): string {
+function loginPage(action: string, error: string, email = ""): string {
   const safe = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -112,7 +112,7 @@ button{width:100%;margin-top:20px;padding:12px;border:0;border-radius:10px;backg
 button:hover{background:#1d4ed8}.err{background:#7f1d1d;border:1px solid #ef4444;border-radius:10px;padding:10px;margin-top:16px;font-size:13px}
 </style></head><body><div class="card">
 <h1>Sign in</h1><p class="sub">Phone-Proctor staff console</p>
-<form method="post" action="login">
+<form method="post" action="${safe(action)}">
 <label for="email">Email</label>
 <input id="email" name="email" type="email" autocomplete="username" required value="${safe(email)}"/>
 <label for="password">Password</label>
@@ -180,7 +180,9 @@ export function mountIdentityProvider(app: Express, cfg: AppConfig, store: Store
         res.status(400).send("unsupported interaction");
         return;
       }
-      res.setHeader("content-type", "text/html").send(loginPage(details.uid, ""));
+      // Absolute action: a relative "login" would resolve against /interaction/
+      // (replacing the uid segment) instead of appending to it.
+      res.setHeader("content-type", "text/html").send(loginPage(`${req.path}/login`, ""));
     } catch {
       res.status(400).send("expired or invalid login request");
     }
@@ -190,7 +192,8 @@ export function mountIdentityProvider(app: Express, cfg: AppConfig, store: Store
     const uid = String(req.params.uid);
     const email = String(req.body.email || "");
     const password = String(req.body.password || "");
-    const fail = (message: string, status = 401) => res.status(status).setHeader("content-type", "text/html").send(loginPage(uid, message, email));
+    const fail = (message: string, status = 401) => res.status(status).setHeader("content-type", "text/html").send(loginPage(`${req.path.replace(/\/login$/, "")}/login`, message, email));
+    void uid;
     try {
       const details = (await provider.interactionDetails(req, res)) as {
         params: { client_id: string };

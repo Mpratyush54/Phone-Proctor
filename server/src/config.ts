@@ -45,7 +45,7 @@ const schema = z.object({
   SESSION_SECRET: z.string().default("dev-session-secret-change-me"),
   TOKEN_PEPPER: z.string().default("dev-pepper"),
   TOKEN_PEPPER_PREVIOUS: z.string().optional(),
-  ORIGIN_ALLOWLIST: z.string().default("http://127.0.0.1:8080,http://localhost:5173"),
+  ORIGIN_ALLOWLIST: z.string().default("http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173"),
   LIVEKIT_URL: z.string().optional(),
   LIVEKIT_API_KEY: z.string().optional(),
   LIVEKIT_API_SECRET: z.string().optional(),

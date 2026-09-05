@@ -1,5 +1,5 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
-import cookieParser from "cookie-parser";
+import cookieParser, { signedCookie as unsignCookie } from "cookie-parser";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -133,6 +133,37 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     return typeof value === "string" && value.length > 0 ? value : null;
   }
 
+  /**
+   * All verified values for a cookie name. Browsers can hold stale duplicates
+   * (e.g. an aborted login leaves an old pp_oidc beside the new one);
+   * cookie-parser only surfaces the first, so match against every value.
+   * Unsigned values are rejected: only `s:`-prefixed values whose signature
+   * verifies are returned (cookie-parser passes unsigned values through).
+   */
+  function allSignedCookies(req: Request, name: string): string[] {
+    const header = req.headers.cookie || "";
+    const out: string[] = [];
+    for (const part of header.split(";")) {
+      const idx = part.indexOf("=");
+      if (idx < 0) continue;
+      if (part.slice(0, idx).trim() !== name) continue;
+      let raw = part.slice(idx + 1).trim();
+      try {
+        raw = decodeURIComponent(raw);
+      } catch {
+        continue;
+      }
+      if (!raw.startsWith("s:")) continue;
+      try {
+        const val = unsignCookie(raw, cfg.SESSION_SECRET) as string | false;
+        if (typeof val === "string" && val.length > 0 && !out.includes(val)) out.push(val);
+      } catch {
+        // tampered value: ignore
+      }
+    }
+    return out;
+  }
+
   function sessionCookie(res: Response, name: string, value: string, maxAgeMs?: number) {
     res.cookie(name, value, {
       httpOnly: true,
@@ -177,16 +208,19 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   }
 
   function staffFrom(req: Request): StaffContext {
-    const raw = signedCookie(req, "pp_session");
-    if (!raw) throw new ApiError("AUTH_DENIED", "no session", 401);
-    const ctx = store.lookupStaff(raw);
-    if (!ctx) throw new ApiError("AUTH_DENIED", "invalid session", 401);
-    req.rawSession = raw;
-    if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
-      const csrf = req.headers["x-csrf-token"];
-      if (!csrf || csrf !== ctx.csrf) throw new ApiError("CSRF_DENIED", "csrf", 403);
+    for (const raw of allSignedCookies(req, "pp_session")) {
+      const ctx = store.lookupStaff(raw);
+      if (ctx) {
+        req.rawSession = raw;
+        if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+          const csrf = req.headers["x-csrf-token"];
+          if (!csrf || csrf !== ctx.csrf) throw new ApiError("CSRF_DENIED", "csrf", 403);
+        }
+        return ctx;
+      }
     }
-    return ctx;
+    const present = allSignedCookies(req, "pp_session").length > 0;
+    throw new ApiError("AUTH_DENIED", present ? "invalid session" : "no session", 401);
   }
 
   app.get("/health/live", (_req, res) => res.json({ status: "live", service: "api" }));
@@ -215,7 +249,7 @@ export function createApp(cfg: AppConfig, store: Store): Express {
       if (req.query.error) {
         throw new ApiError("AUTH_DENIED", `provider refused: ${String(req.query.error_description || req.query.error)}`, 401);
       }
-      if (!cookieState || !state || cookieState !== state) {
+      if (!cookieState || !state || !allSignedCookies(req, "pp_oidc").includes(state)) {
         throw new ApiError("AUTH_DENIED", "state mismatch", 401);
       }
       if (!code) throw new ApiError("AUTH_DENIED", "missing code", 401);
@@ -226,7 +260,11 @@ export function createApp(cfg: AppConfig, store: Store): Express {
       sessionCookie(res, "pp_session", sess.raw);
       const wantsHtml = (req.headers.accept || "").includes("text/html");
       if (wantsHtml) {
-        const ui = cfg.origins.find((o) => o.includes("517")) || cfg.origins[0];
+        // Stay on 127.0.0.1: auth cookies are host-bound and the IdP lives there.
+        const ui =
+          cfg.origins.find((o) => o.includes("127.0.0.1:51")) ||
+          cfg.origins.find((o) => o.includes(":51")) ||
+          cfg.origins[0];
         if (ui) return res.redirect(302, `${ui}/exams`);
       }
       res.json({ ok: true, csrf: sess.csrf, org_id: orgId });
@@ -245,8 +283,7 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   });
 
   app.post("/api/v1/auth/logout", (req, res) => {
-    const raw = signedCookie(req, "pp_session");
-    if (raw) store.logout(raw);
+    for (const raw of allSignedCookies(req, "pp_session")) store.logout(raw);
     res.clearCookie("pp_session", { path: "/" });
     res.json({ ok: true });
   });
@@ -268,15 +305,16 @@ export function createApp(cfg: AppConfig, store: Store): Express {
 
   app.get("/api/v1/auth/step-up/callback", async (req, res, next) => {
     try {
-      const raw = signedCookie(req, "pp_session");
-      if (!raw) throw new ApiError("AUTH_DENIED", "no session", 401);
+      const raws = allSignedCookies(req, "pp_session");
+      if (raws.length === 0) throw new ApiError("AUTH_DENIED", "no session", 401);
+      const raw = raws[0];
       const cookieState = signedCookie(req, "pp_stepup");
       const state = String(req.query.state || "");
       const code = String(req.query.code || "");
       if (req.query.error) {
         throw new ApiError("AUTH_DENIED", `provider refused: ${String(req.query.error_description || req.query.error)}`, 401);
       }
-      if (!cookieState || !state || cookieState !== state) {
+      if (!cookieState || !state || !allSignedCookies(req, "pp_stepup").includes(state)) {
         throw new ApiError("AUTH_DENIED", "state mismatch", 401);
       }
       if (!code) throw new ApiError("AUTH_DENIED", "missing code", 401);
@@ -549,9 +587,19 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   /* ---------------- candidate exam (pp_candidate grant cookie) ---------------- */
 
   function candidateFrom(req: Request): { sessionId: string; enrollmentId: string; csrf: string } {
-    const raw = signedCookie(req, "pp_candidate");
-    if (!raw) throw new ApiError("AUTH_DENIED", "no candidate session", 401);
-    const grant = store.candidateFromGrant(raw);
+    const raws = allSignedCookies(req, "pp_candidate");
+    if (raws.length === 0) throw new ApiError("AUTH_DENIED", "no candidate session", 401);
+    let grant: { sessionId: string; enrollmentId: string; csrf: string } | null = null;
+    let denied: ApiError | null = null;
+    for (const raw of raws) {
+      try {
+        grant = store.candidateFromGrant(raw);
+        break;
+      } catch (err) {
+        denied = err as ApiError;
+      }
+    }
+    if (!grant) throw denied ?? new ApiError("AUTH_DENIED", "bad grant", 401);
     if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
       const csrf = req.headers["x-csrf-token"];
       if (!csrf || csrf !== grant.csrf) throw new ApiError("CSRF_DENIED", "csrf", 403);

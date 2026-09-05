@@ -3,6 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <title>Phone-Proctor Console</title>
+    <script>
+      // Auth cookies are host-bound: keep the whole flow (UI, API, IdP) on
+      // 127.0.0.1 so localhost/127.0.0.1 mixing never orphans the session.
+      if (window.location.hostname === "localhost") {
+        window.location.replace(window.location.href.replace("://localhost", "://127.0.0.1"));
+      }
+    </script>
     <style>
       body { font-family: ui-sans-serif, system-ui; margin: 0; background: #0b1220; color: #e8eefc; }
       header { padding: 12px 20px; background: #111a2e; display: flex; gap: 16px; align-items: center; }
