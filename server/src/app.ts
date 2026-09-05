@@ -197,6 +197,10 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     try {
       const { state, url } = await beginOidc(cfg, store);
       sessionCookie(res, "pp_oidc", state, 5 * 60_000);
+      // Browser navigation (address bar, link, window.location): send the user
+      // straight to the provider instead of showing raw JSON.
+      const wantsHtml = (req.headers.accept || "").includes("text/html");
+      if (wantsHtml) return res.redirect(302, url);
       res.json({ url, state });
     } catch (err) {
       next(err);
