@@ -96,7 +96,7 @@ export interface StaffContext {
 export class Store {
   pepper: string;
   orgs = new Map<string, { id: string; name: string; slug: string }>();
-  users = new Map<string, { id: string; email: string; issuer: string; subject: string; name: string }>();
+  users = new Map<string, { id: string; email: string; issuer: string; subject: string; name: string; passwordHash?: string }>();
   memberships = new Map<string, { orgId: string; userId: string }>();
   roles: { orgId: string; userId: string; role: Role; examId?: string }[] = [];
   staffSessions = new Map<string, { id: string; orgId: string; userId: string; sessionHash: string; refreshHash: string; expires: number; revoked?: boolean; replay?: boolean; stepUpUntil?: number; csrf: string }>();
@@ -214,7 +214,9 @@ export class Store {
       if (u.issuer === issuer && u.subject === subject) return u;
     }
     const id = uuid();
-    const user = { id, email: emailN, issuer, subject, name };
+    const user: { id: string; email: string; issuer: string; subject: string; name: string; passwordHash?: string } = {
+      id, email: emailN, issuer, subject, name,
+    };
     this.users.set(id, user);
     this.persist(() => upsertUserAccount(user));
     return user;
@@ -312,6 +314,7 @@ export class Store {
     this.addMembership(orgId, user.id);
     this.roles.push({ orgId, userId: user.id, role: "platform_ops" });
     this.roles.push({ orgId, userId: user.id, role: "exam_admin" });
+    this.persist(() => upsertUserAccount({ ...user }));
     this.persist(() => upsertRoleAssignment({ orgId, userId: user.id, role: "platform_ops" }));
     this.persist(() => upsertRoleAssignment({ orgId, userId: user.id, role: "exam_admin" }));
     this.persist(() => upsertOrganization({ id: orgId, name: "Primary", slug: "primary" }));
@@ -994,7 +997,7 @@ export class Store {
   /** Fill memory maps from a durable snapshot (boot hydration). Memory stays the hot path. */
   loadSnapshot(snap: {
     orgs: { id: string; name: string; slug: string }[];
-    users: { id: string; email: string; issuer: string; subject: string; name: string }[];
+    users: { id: string; email: string; issuer: string; subject: string; name: string; passwordHash?: string }[];
     memberships: { orgId: string; userId: string }[];
     roles: { orgId: string; userId: string; role: Role; examId?: string }[];
     staffSessions: {

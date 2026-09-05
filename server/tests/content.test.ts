@@ -100,9 +100,14 @@ test("candidate: code login, one-by-one items, scoring, no-back rule", () => {
     (first as { options: { id: string }[] }).options.map((o) => o.id),
   );
 
-  // wrong option set → incorrect, negative marks
-  const wrong = (first as { options: { id: string }[] }).options.filter((_, i) => i > 0).map((o) => o.id);
-  assert.deepEqual(store.submitAnswer(grant.sessionId, (first as { variant_id: string }).variant_id, [wrong[0]], ""), {
+  // wrong option set → incorrect, negative marks (resolve a genuinely wrong
+  // option id: shown order is shuffled per session, so filter against truth)
+  const shownIds = (first as { options: { id: string }[] }).options.map((o) => o.id);
+  const truthFirst = new Set(
+    [...store.qoptions.values()].filter((o) => o.variantId === (first as { variant_id: string }).variant_id && o.correct).map((o) => o.id),
+  );
+  const wrongId = shownIds.find((id) => !truthFirst.has(id))!;
+  assert.deepEqual(store.submitAnswer(grant.sessionId, (first as { variant_id: string }).variant_id, [wrongId], ""), {
     accepted: true,
   });
   const stored = [...store.answers.values()].find(

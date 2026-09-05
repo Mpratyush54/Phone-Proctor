@@ -225,14 +225,20 @@ export async function upsertUserAccount(row: {
   issuer: string;
   subject: string;
   name: string;
+  passwordHash?: string;
 }): Promise<void> {
   const pool = getPool();
   if (!pool) return;
   await pool.query(
-    `INSERT INTO user_account (id, email_normalized, issuer, subject, display_name)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name`,
-    [row.id, row.email.toLowerCase(), row.issuer, row.subject, row.name],
+    `INSERT INTO user_account (id, email_normalized, issuer, subject, display_name, password_hash)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (id) DO UPDATE SET
+       email_normalized = EXCLUDED.email_normalized,
+       issuer = EXCLUDED.issuer,
+       subject = EXCLUDED.subject,
+       display_name = EXCLUDED.display_name,
+       password_hash = COALESCE(EXCLUDED.password_hash, user_account.password_hash)`,
+    [row.id, row.email.toLowerCase(), row.issuer, row.subject, row.name, row.passwordHash ?? null],
   );
 }
 

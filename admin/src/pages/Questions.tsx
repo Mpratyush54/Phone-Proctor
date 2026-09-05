@@ -62,112 +62,136 @@ export function Questions() {
   const group = bank?.groups.find((g) => g.id === selGroup) || bank?.groups[0];
 
   return (
-    <main>
-      <h1>Question banks</h1>
-      <section>
-        <input value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="Bank name" />
-        <button onClick={() => run(() => api("/api/v1/banks", { method: "POST", body: JSON.stringify({ name: bankName }) }), "create bank")}>
-          Create bank
-        </button>
-      </section>
+    <>
+      <div className="pagehead">
+        <h1>Question banks</h1>
+        <p className="muted">Groups hold equivalent framings · publishing freezes an immutable version · exams bind versions</p>
+      </div>
+      <div className="card">
+        <h3>New bank</h3>
+        <div className="toolbar">
+          <input value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="Bank name" />
+          <button onClick={() => run(() => api("/api/v1/banks", { method: "POST", body: JSON.stringify({ name: bankName }) }), "create bank")}>
+            Create bank
+          </button>
+        </div>
+      </div>
 
-      <section>
-        <h2>Banks</h2>
-        <select value={selBank} onChange={(e) => { setSelBank(e.target.value); setSelGroup(""); setSelVersion(""); }}>
-          {banks.map((b) => (
-            <option key={b.id} value={b.id}>{b.name}</option>
-          ))}
-        </select>
-        <button onClick={() => refresh()}>Refresh</button>
+      <div className="card">
+        <h3>Banks</h3>
+        <div className="toolbar">
+          <select value={selBank} onChange={(e) => { setSelBank(e.target.value); setSelGroup(""); setSelVersion(""); }}>
+            {banks.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+          <button className="ghost" onClick={() => refresh()}>Refresh</button>
+        </div>
         {bank && (
           <div>
             <h3>Add group to {bank.name}</h3>
-            <input value={groupTitle} onChange={(e) => setGroupTitle(e.target.value)} placeholder="Group title (e.g. Algebra)" />
-            <button
-              onClick={() =>
-                run(() => api(`/api/v1/banks/${bank.id}/groups`, { method: "POST", body: JSON.stringify({ title: groupTitle }) }), "add group")
-              }
-            >
-              Add group
-            </button>
+            <div className="toolbar">
+              <input value={groupTitle} onChange={(e) => setGroupTitle(e.target.value)} placeholder="Group title (e.g. Algebra)" />
+              <button
+                className="ghost"
+                onClick={() =>
+                  run(() => api(`/api/v1/banks/${bank.id}/groups`, { method: "POST", body: JSON.stringify({ title: groupTitle }) }), "add group")
+                }
+              >
+                Add group
+              </button>
+            </div>
             <h3>Add variant (framing) to group</h3>
             <select value={selGroup} onChange={(e) => setSelGroup(e.target.value)}>
               {bank.groups.map((g) => (
                 <option key={g.id} value={g.id}>{g.title}</option>
               ))}
             </select>
-            <br />
-            <textarea value={stem} onChange={(e) => setStem(e.target.value)} rows={3} cols={60} placeholder="Question stem" />
-            <br />
-            <textarea value={optText} onChange={(e) => setOptText(e.target.value)} rows={4} cols={60} placeholder="One option per line" />
-            <br />
-            <label>
-              Correct option index (0-based):{" "}
-              <input value={correctIdx} onChange={(e) => setCorrectIdx(e.target.value)} style={{ width: 60 }} />
-            </label>{" "}
-            <button
-              onClick={() => {
-                const options = optText.split("\n").map((s) => s.trim()).filter(Boolean).map((label, i) => ({
-                  label,
-                  correct: i === Number(correctIdx),
-                }));
-                run(
-                  () => api(`/api/v1/groups/${group?.id}/variants`, { method: "POST", body: JSON.stringify({ stem, qtype: "mcq_single", options }) }),
-                  "add variant",
-                );
-              }}
-            >
-              Add variant
-            </button>
+            <label>Question stem</label>
+            <textarea value={stem} onChange={(e) => setStem(e.target.value)} rows={3} style={{ width: "100%" }} placeholder="Question stem" />
+            <label>Options (one per line)</label>
+            <textarea value={optText} onChange={(e) => setOptText(e.target.value)} rows={4} style={{ width: "100%" }} placeholder="One option per line" />
+            <div className="toolbar">
+              <label style={{ margin: 0 }}>
+                Correct option index (0-based):{" "}
+                <input value={correctIdx} onChange={(e) => setCorrectIdx(e.target.value)} style={{ width: 60 }} />
+              </label>
+              <button
+                onClick={() => {
+                  const options = optText.split("\n").map((s) => s.trim()).filter(Boolean).map((label, i) => ({
+                    label,
+                    correct: i === Number(correctIdx),
+                  }));
+                  run(
+                    () => api(`/api/v1/groups/${group?.id}/variants`, { method: "POST", body: JSON.stringify({ stem, qtype: "mcq_single", options }) }),
+                    "add variant",
+                  );
+                }}
+              >
+                Add variant
+              </button>
+            </div>
             <h3>Publish</h3>
-            <button onClick={() => run(() => api(`/api/v1/banks/${bank.id}/publish`, { method: "POST", body: "{}" }), "publish")}>
-              Publish new version
-            </button>
-            <p>Versions: {bank.versions.map((v) => `v${v.version}`).join(", ") || "none yet"}</p>
+            <div className="toolbar">
+              <button onClick={() => run(() => api(`/api/v1/banks/${bank.id}/publish`, { method: "POST", body: "{}" }), "publish")}>
+                Publish new version
+              </button>
+              <span className="muted">Versions: {bank.versions.map((v) => `v${v.version}`).join(", ") || "none yet"}</span>
+            </div>
+            {bank.groups.map((g) => (
+              <div key={g.id} style={{ marginTop: 8 }}>
+                <b>{g.title}</b> <span className="muted">{g.variants.length} variant(s)</span>
+              </div>
+            ))}
           </div>
         )}
-      </section>
+      </div>
 
-      <section>
-        <h2>Bind content to exam</h2>
-        <input value={examId} onChange={(e) => setExamId(e.target.value)} placeholder="Exam id" size={40} />
-        <select value={selVersion} onChange={(e) => setSelVersion(e.target.value)}>
-          <option value="">Select version</option>
-          {(bank?.versions || []).map((v) => (
-            <option key={v.id} value={v.id}>v{v.version}</option>
-          ))}
-        </select>
-        <label>
-          <input type="checkbox" checked={allowBack} onChange={(e) => setAllowBack(e.target.checked)} /> allow back-navigation
-        </label>
-        <input value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="Duration (s)" style={{ width: 120 }} />
-        <button
-          onClick={() =>
-            run(
-              () => api(`/api/v1/exams/${examId}/content`, { method: "PATCH", body: JSON.stringify({ content_version_id: selVersion, allow_back_navigation: allowBack, duration_s: Number(duration) || null }) }),
-              "bind content",
-            )
-          }
-        >
-          Bind
-        </button>
-      </section>
+      <div className="card">
+        <h3>Bind content to exam</h3>
+        <div className="toolbar">
+          <input value={examId} onChange={(e) => setExamId(e.target.value)} placeholder="Exam id" size={30} />
+          <select value={selVersion} onChange={(e) => setSelVersion(e.target.value)}>
+            <option value="">Select version</option>
+            {(bank?.versions || []).map((v) => (
+              <option key={v.id} value={v.id}>v{v.version}</option>
+            ))}
+          </select>
+          <label style={{ margin: 0, display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={allowBack} onChange={(e) => setAllowBack(e.target.checked)} /> allow back-navigation
+          </label>
+          <input value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="Duration (s)" style={{ width: 110 }} />
+          <button
+            onClick={() =>
+              run(
+                () => api(`/api/v1/exams/${examId}/content`, { method: "PATCH", body: JSON.stringify({ content_version_id: selVersion, allow_back_navigation: allowBack, duration_s: Number(duration) || null }) }),
+                "bind content",
+              )
+            }
+          >
+            Bind
+          </button>
+        </div>
+      </div>
 
-      <section>
-        <h2>Candidate login codes</h2>
-        <input value={enrollmentId} onChange={(e) => setEnrollmentId(e.target.value)} placeholder="Enrollment id" size={40} />
-        <button onClick={() => run(() => api(`/api/v1/enrollments/${enrollmentId}/candidate-code`, { method: "POST", body: "{}" }), "issue code")}>
-          Issue code (shown once — copy it)
-        </button>
-        <button
-          onClick={() => run(() => api(`/api/v1/enrollments/${enrollmentId}/candidate-codes`), "code status")}
-        >
-          Code status
-        </button>
-      </section>
+      <div className="card">
+        <h3>Candidate login codes</h3>
+        <div className="toolbar">
+          <input value={enrollmentId} onChange={(e) => setEnrollmentId(e.target.value)} placeholder="Enrollment id" size={30} />
+          <button onClick={() => run(() => api(`/api/v1/enrollments/${enrollmentId}/candidate-code`, { method: "POST", body: "{}" }), "issue code")}>
+            Issue code (shown once — copy it)
+          </button>
+          <button
+            className="ghost"
+            onClick={() => run(() => api(`/api/v1/enrollments/${enrollmentId}/candidate-codes`), "code status")}
+          >
+            Code status
+          </button>
+        </div>
+      </div>
 
-      {out && <pre>{out}</pre>}
-      {err && <pre style={{ color: "crimson" }}>{err}</pre>}
-    </main>
+      {out && <pre className="dump">{out}</pre>}
+      {err && <pre className="dump err">{err}</pre>}
+    </>
   );
 }

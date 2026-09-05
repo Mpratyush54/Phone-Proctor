@@ -51,6 +51,8 @@ const schema = z.object({
   LIVEKIT_API_SECRET: z.string().optional(),
   ALLOW_DEV_LOGIN: z.string().optional(),
   SEED_DEMO: z.string().optional(),
+  SEED_USERS: z.string().optional(),
+  EMBEDDED_IDP: z.string().optional(),
   MEDIA_FAKE: z.string().optional(),
 });
 
@@ -59,6 +61,7 @@ export type AppConfig = z.infer<typeof schema> & {
   production: boolean;
   allowDevLogin: boolean;
   seedDemo: boolean;
+  embeddedIdp: boolean;
   mediaFake: boolean;
 };
 
@@ -114,6 +117,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     production,
     allowDevLogin: !production && env.ALLOW_DEV_LOGIN === "true",
     seedDemo: !production && env.SEED_DEMO === "true",
+    embeddedIdp: !production && env.EMBEDDED_IDP === "true",
     mediaFake: !production && env.MEDIA_FAKE === "true",
     origins: cfg.ORIGIN_ALLOWLIST.split(",").map((s) => s.trim()).filter(Boolean),
   };

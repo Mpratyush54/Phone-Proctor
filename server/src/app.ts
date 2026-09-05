@@ -220,6 +220,11 @@ export function createApp(cfg: AppConfig, store: Store): Express {
       const sess = store.createStaffSession(orgId, userId);
       res.clearCookie("pp_oidc", { path: "/" });
       sessionCookie(res, "pp_session", sess.raw);
+      const wantsHtml = (req.headers.accept || "").includes("text/html");
+      if (wantsHtml) {
+        const ui = cfg.origins.find((o) => o.includes("517")) || cfg.origins[0];
+        if (ui) return res.redirect(302, `${ui}/exams`);
+      }
       res.json({ ok: true, csrf: sess.csrf, org_id: orgId });
     } catch (err) {
       next(err);

@@ -6,37 +6,47 @@ export function ExamSetup({ embedded, onChanged }: { embedded?: boolean; onChang
   const { id: paramId = "" } = useParams();
   const id = paramId;
   const [csv, setCsv] = React.useState("student_external_id,display_name\ns1,Ada");
+  const [note, setNote] = React.useState("");
   async function afterChange() {
     if (onChanged) await onChanged();
   }
   const body = (
     <>
-      <button onClick={() => api(`/api/v1/exams/${id}/open`, { method: "POST", body: "{}" }).then(afterChange)}>Open exam</button>
+      <div className="toolbar">
+        <button onClick={() => api(`/api/v1/exams/${id}/open`, { method: "POST", body: "{}" }).then(afterChange).then(() => setNote("Exam opened"))}>
+          Open exam
+        </button>
+      </div>
       <h2>Roster CSV</h2>
-      <textarea rows={4} cols={60} value={csv} onChange={(e) => setCsv(e.target.value)} />
-      <button
-        onClick={async () => {
-          const rows = csv
-            .trim()
-            .split("\n")
-            .slice(1)
-            .map((line) => {
-              const [student_external_id, display_name] = line.split(",");
-              return { student_external_id, display_name };
-            });
-          await api(`/api/v1/exams/${id}/roster`, { method: "POST", body: JSON.stringify({ rows }) });
-          await afterChange();
-        }}
-      >
-        Import
-      </button>
+      <textarea rows={4} style={{ width: "100%" }} value={csv} onChange={(e) => setCsv(e.target.value)} />
+      <div className="toolbar">
+        <button
+          className="ghost"
+          onClick={async () => {
+            const rows = csv
+              .trim()
+              .split("\n")
+              .slice(1)
+              .map((line) => {
+                const [student_external_id, display_name] = line.split(",");
+                return { student_external_id, display_name };
+              });
+            const r = await api(`/api/v1/exams/${id}/roster`, { method: "POST", body: JSON.stringify({ rows }) });
+            setNote(`Imported: ${(r.results || []).filter((x: { ok: boolean }) => x.ok).length}/${(r.results || []).length} ok`);
+            await afterChange();
+          }}
+        >
+          Import roster
+        </button>
+      </div>
+      {note && <p className="muted">{note}</p>}
     </>
   );
   if (embedded) return body;
   return (
-    <main>
-      <h1>Exam setup</h1>
-      {body}
-    </main>
+    <>
+      <div className="pagehead"><h1>Exam setup</h1></div>
+      <div className="card">{body}</div>
+    </>
   );
 }

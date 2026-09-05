@@ -7,7 +7,7 @@ const log = createLogger("hydrate");
 /** Durable snapshot loaded from Postgres on boot. High-volume event payloads stay in SQL. */
 export interface HydratedSnapshot {
   orgs: { id: string; name: string; slug: string }[];
-  users: { id: string; email: string; issuer: string; subject: string; name: string }[];
+  users: { id: string; email: string; issuer: string; subject: string; name: string; passwordHash?: string }[];
   memberships: { orgId: string; userId: string }[];
   roles: { orgId: string; userId: string; role: Role; examId?: string }[];
   staffSessions: {
@@ -80,9 +80,13 @@ export async function hydrate(): Promise<HydratedSnapshot> {
     snap.orgs = orgs.rows.map((r) => ({ id: r.id, name: r.name, slug: r.slug }));
 
     const users = await pool.query(
-      `SELECT id, email_normalized AS email, issuer, subject, display_name AS name FROM user_account`,
+      `SELECT id, email_normalized AS email, issuer, subject, display_name AS name,
+              password_hash AS "passwordHash" FROM user_account`,
     );
-    snap.users = users.rows.map((r) => ({ id: r.id, email: r.email, issuer: r.issuer, subject: r.subject, name: r.name }));
+    snap.users = users.rows.map((r) => ({
+      id: r.id, email: r.email, issuer: r.issuer, subject: r.subject, name: r.name,
+      passwordHash: r.passwordHash ?? undefined,
+    }));
 
     const mems = await pool.query(`SELECT org_id AS "orgId", user_id AS "userId" FROM organization_membership WHERE status = 'active'`);
     snap.memberships = mems.rows;

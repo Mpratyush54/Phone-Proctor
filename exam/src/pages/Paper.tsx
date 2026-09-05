@@ -76,60 +76,65 @@ export function Paper() {
     nav("/");
   }
 
-  if (!item) return <main style={{ padding: 24 }}>Loading…{err && <pre>{err}</pre>}</main>;
+  if (!item) {
+    return (
+      <div className="wrap">
+        <div className="card"><p className="muted">Loading…</p>{err && <pre className="err">{err}</pre>}</div>
+      </div>
+    );
+  }
   if (item.done) {
     return (
-      <main style={{ maxWidth: 560, margin: "4rem auto", fontFamily: "system-ui" }}>
-        <h1>Submitted</h1>
-        <p>
-          Answered {item.answered} of {item.total}. Your responses are recorded. You may now close this window.
-        </p>
-        <button onClick={logout}>Log out</button>
-      </main>
+      <div className="wrap">
+        <div className="card">
+          <h1>Submitted ✓</h1>
+          <p className="muted">Answered {item.answered} of {item.total}. Your responses are recorded. You may now close this window.</p>
+          <div className="toolbar"><button className="ghost" onClick={logout}>Log out</button></div>
+        </div>
+      </div>
     );
   }
 
   const multi = item.qtype === "mcq_multi";
+  const pct = item.total ? Math.round(((item.answered || 0) / item.total) * 100) : 0;
   function toggle(id: string) {
     if (multi) setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
     else setPicked([id]);
   }
 
   return (
-    <main style={{ maxWidth: 640, margin: "2rem auto", fontFamily: "system-ui" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+    <div className="wrap">
+      <div className="topbar">
         <b>{exam ? `${exam.code} — ${exam.title}` : "Exam"}</b>
-        <span>
-          Q{item.position} of {item.total} · answered {item.answered}
-          {left !== null && <span> · {left}s left</span>}
+        <span className="muted">
+          Q{item.position} of {item.total}
+          {left !== null && <span className="timer"> · {left}s</span>}
         </span>
-      </header>
-      <p style={{ color: "#555" }}>{item.group_title}</p>
-      <h2 style={{ whiteSpace: "pre-wrap" }}>{item.stem}</h2>
-      {item.qtype !== "short_text" && item.qtype !== "long_text" ? (
-        <div>
-          {item.options?.map((o) => (
-            <label key={o.id} style={{ display: "block", padding: "8px 0" }}>
-              <input type={multi ? "checkbox" : "radio"} name="opt" checked={picked.includes(o.id)} onChange={() => toggle(o.id)} />{" "}
-              {o.label}
-            </label>
-          ))}
-        </div>
-      ) : (
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={item.qtype === "long_text" ? 8 : 3}
-          style={{ width: "100%" }}
-        />
-      )}
-      <div style={{ marginTop: 16 }}>
-        <button onClick={submit} disabled={submitting}>
-          {submitting ? "Submitting…" : "Submit answer"}
-        </button>{" "}
-        <button onClick={logout}>Log out</button>
       </div>
-      {err && <pre style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{err}</pre>}
-    </main>
+      <div className="progress"><div style={{ width: `${pct}%` }} /></div>
+      <div className="card">
+        <p className="muted" style={{ marginTop: 0 }}>{item.group_title}</p>
+        <h1 style={{ whiteSpace: "pre-wrap" }}>{item.stem}</h1>
+        {item.qtype !== "short_text" && item.qtype !== "long_text" ? (
+          <div style={{ marginTop: 12 }}>
+            {item.options?.map((o) => (
+              <label className="opt" key={o.id}>
+                <input type={multi ? "checkbox" : "radio"} name="opt" checked={picked.includes(o.id)} onChange={() => toggle(o.id)} />
+                <span>{o.label}</span>
+              </label>
+            ))}
+          </div>
+        ) : (
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={item.qtype === "long_text" ? 8 : 3} />
+        )}
+        <div className="toolbar">
+          <button onClick={submit} disabled={submitting} style={{ flex: 1 }}>
+            {submitting ? "Submitting…" : "Submit answer"}
+          </button>
+          <button className="ghost" onClick={logout}>Log out</button>
+        </div>
+        {err && <pre className="err">{err}</pre>}
+      </div>
+    </div>
   );
 }

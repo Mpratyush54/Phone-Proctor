@@ -20,19 +20,21 @@ export function CodeLogin() {
     }
   }
   return (
-    <main style={{ maxWidth: 480, margin: "4rem auto", fontFamily: "system-ui" }}>
-      <h1>Candidate login</h1>
-      <p>Enter the one-time code issued for your enrollment. Codes are single-candidate, limited-use, and expire.</p>
-      <input
-        value={code}
-        onChange={(e) => setCode(e.target.value.toUpperCase())}
-        placeholder="e.g. A1B2C3D4E5F6"
-        style={{ width: "100%", padding: 10, fontSize: 18, letterSpacing: 2 }}
-      />
-      <button onClick={login} style={{ marginTop: 12, padding: "10px 24px", fontSize: 16 }}>
-        Start exam
-      </button>
-      {err && <pre style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{err}</pre>}
-    </main>
+    <div className="wrap">
+      <div className="card">
+        <h1>Candidate login</h1>
+        <p className="muted">Enter the one-time code issued for your enrollment. Codes are single-candidate, limited-use, and expire.</p>
+        <input
+          className="code"
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          placeholder="A1B2C3D4E5F6"
+        />
+        <div className="toolbar">
+          <button onClick={login} style={{ flex: 1 }}>Start exam</button>
+        </div>
+        {err && <pre className="err">{err}</pre>}
+      </div>
+    </div>
   );
 }
