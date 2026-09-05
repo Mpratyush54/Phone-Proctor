@@ -1,0 +1,21 @@
+# Pin matching CPU-only PyTorch wheels.
+# NEVER mix CUDA torch with random torchvision/torchaudio from PyPI
+# (causes WinError 127 / "procedure entry point could not be located").
+#
+# Compatible set:
+#   torch==2.5.1+cpu
+#   torchvision==0.20.1+cpu
+#   torchaudio==2.5.1+cpu
+#
+# MUST use both indexes (CPU wheels + PyPI deps like typing_extensions):
+#   pip uninstall -y torch torchvision torchaudio
+#   pip install --no-cache-dir -r requirements-torch-cpu.txt
+#
+# After installing ultralytics, re-run this file — it may upgrade torchvision.
+
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
+torch==2.5.1+cpu
+torchvision==0.20.1+cpu
+torchaudio==2.5.1+cpu

@@ -1,4 +1,5 @@
 import http from "node:http";
+import path from "node:path";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./log.js";
 import { globalStore } from "./store.js";
@@ -50,6 +51,7 @@ export function startWorker(store = globalStore) {
   return server;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const entry = process.argv[1] || "";
+if (import.meta.url === `file://${entry}` || path.basename(entry) === "worker.ts") {
   startWorker();
 }

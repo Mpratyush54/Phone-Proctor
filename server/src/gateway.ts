@@ -1,4 +1,5 @@
 import http from "node:http";
+import path from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./log.js";
@@ -123,6 +124,7 @@ export function startGateway(store = globalStore, opts?: { listen?: boolean; por
   return server;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const entry = process.argv[1] || "";
+if (import.meta.url === `file://${entry}` || path.basename(entry) === "gateway.ts") {
   startGateway();
 }

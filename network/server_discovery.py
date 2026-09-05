@@ -26,7 +26,7 @@ class DiscoveryServer:
         self.announcer_thread.start()
 
         print(f"-"*40)
-        print(f"[DISCOVERY] 🟢 UDP Discovery & Announcement Service Started")
+        print(f"[DISCOVERY] UDP Discovery & Announcement Service Started (OK)")
         print(f"[DISCOVERY] Listening on UDP {self.udp_port}")
         print(f"[DISCOVERY] Announcing every 3s to network...")
         print(f"-"*40)
@@ -39,7 +39,7 @@ class DiscoveryServer:
         try:
             self.sock.bind((self.bind_host, self.udp_port))
         except Exception as e:
-            print(f"[DISCOVERY] ❌ Failed to bind UDP port: {e}")
+            print(f"[DISCOVERY] FAILED to bind UDP port: {e}")
             return
 
         while self.running:
@@ -51,7 +51,7 @@ class DiscoveryServer:
                 if message == "PROCTOR_ANNOUNCE":
                     continue
 
-                print(f"[DISCOVERY] 📡 Packet from {addr}: '{message}'")
+                print(f"[DISCOVERY] Packet from {addr}: '{message}'")
                 
                 if message == "PROCTOR_DISCOVER":
                     self._send_response(addr)
@@ -88,9 +88,9 @@ class DiscoveryServer:
         try:
             msg = "PROCTOR_HERE".encode('utf-8')
             self.sock.sendto(msg, addr)
-            print(f"[DISCOVERY] ✅ Sent handshake to {addr}")
+            print(f"[DISCOVERY] Sent handshake to {addr} (OK)")
         except Exception as e:
-            print(f"[DISCOVERY] ❌ Failed to send response: {e}")
+            print(f"[DISCOVERY] FAILED to send response: {e}")
 
     def stop(self):
         self.running = False

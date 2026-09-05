@@ -52,11 +52,13 @@ class ProctorThread(QThread):
     status_update = pyqtSignal(dict)  # Connection status
     gaze_update = pyqtSignal(float, float, str, bool, bool)  # yaw, pitch, direction, violation, phone_face
     
-    def __init__(self, server=None, dev_mode=False, logger=None):
+    def __init__(self, server=None, dev_mode=False, logger=None, enable_sniff=False, uplink=None):
         super().__init__()
         self.server = server
         self.dev_mode = dev_mode
         self.logger = logger
+        self.enable_sniff = bool(enable_sniff)
+        self.uplink = uplink
         self.running = True
         
         # Placeholders
@@ -178,7 +180,7 @@ class ProctorThread(QThread):
             self.monitor_check = MonitorCheck()
             self.hw_monitor = HardwareMonitor()
             if allowed(Capability.NETWORK_MONITOR):
-                self.net_monitor = AdvancedNetworkMonitor()
+                self.net_monitor = AdvancedNetworkMonitor(enable_sniff=self.enable_sniff)
                 self.net_monitor.start_monitoring()
             else:
                 print("[THREAD] Network monitor declined — not started")

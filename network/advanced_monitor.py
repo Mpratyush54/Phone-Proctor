@@ -1,6 +1,5 @@
 import os
 import psutil
-import scapy.all as scapy
 import threading
 import time
 import socket
@@ -9,8 +8,19 @@ from collections import defaultdict, deque
 import logging
 import subprocess
 
+# scapy is OPTIONAL — agent must run without it (standalone / no Npcap).
+scapy = None
+SCAPY_AVAILABLE = False
+try:
+    import scapy.all as scapy  # type: ignore
+    SCAPY_AVAILABLE = True
+    logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+except Exception as _e:
+    print(f"[NET] scapy unavailable — packet sniff disabled ({_e})")
+
+
 class AdvancedNetworkMonitor:
-    def __init__(self):
+    def __init__(self, enable_sniff: bool = True):
         # Whitelisted Processes (Educational/System)
         self.WHITELIST_PROCESSES = [
              "svchost.exe", "System", "Registry", "spoolsv.exe", "explorer.exe", "Phone-Proctor.exe", "QtWebEngineProcess.exe"
@@ -40,19 +50,21 @@ class AdvancedNetworkMonitor:
         # Persistent dedupe for script-engine alerts (survives event buffer clears)
         self._reported_script_engines = set()
         
-        # Sniffer Control
+        # Sniffer Control (requires scapy + Npcap/libpcap)
+        self.enable_sniff = bool(enable_sniff) and SCAPY_AVAILABLE
         self.is_sniffing = False
         self.sniffer_thread = None
-        
-        logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
     def start_monitoring(self):
         """
-        Starts both Process-Level monitoring and Packet-Level sniffing.
+        Starts process-level monitoring. Packet sniff only if scapy is available
+        and enable_sniff was requested (consent-gated).
         """
+        if not self.enable_sniff:
+            print("[INFO] Packet sniff disabled (no scapy/consent/Npcap) — process monitor only")
+            return
+
         self.is_sniffing = True
-        
-        # Start Packet Sniffer in background
         self.sniffer_thread = threading.Thread(target=self._sniff_packets, daemon=True)
         self.sniffer_thread.start()
         print("[INFO] Network Packet Sniffer Started")
@@ -234,6 +246,10 @@ class AdvancedNetworkMonitor:
         return pids
 
     def _sniff_packets(self):
+        if not SCAPY_AVAILABLE or scapy is None:
+            print("[WARN] Packet sniff skipped — scapy not installed")
+            self.is_sniffing = False
+            return
         try:
             scapy.sniff(
                 prn=self._process_packet,
@@ -244,9 +260,10 @@ class AdvancedNetworkMonitor:
             )
         except Exception as e:
             print(f"[WARN] Packet Sniffing Failed (Npcap missing?): {e}")
+            self.is_sniffing = False
 
     def _process_packet(self, packet):
-        if not self.is_sniffing:
+        if not self.is_sniffing or scapy is None:
             return
 
         if packet.haslayer(scapy.IP):

@@ -1,0 +1,3 @@
+# OPTIONAL — not required for standalone agent core.
+# Enables advanced packet sniff (Windows needs Npcap installed + consent).
+scapy>=2.5,<3

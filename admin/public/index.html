@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phone-Proctor Examiner</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", system-ui, sans-serif; }
+    body { margin: 0; background: #0b0d10; color: #e8eaed; }
+    header { padding: 16px 20px; border-bottom: 1px solid #222; display: flex; gap: 12px; align-items: center; }
+    h1 { font-size: 16px; margin: 0; letter-spacing: 0.04em; text-transform: uppercase; color: #9aa0a6; }
+    input, button { background: #151920; color: #e8eaed; border: 1px solid #333; border-radius: 8px; padding: 8px 12px; }
+    button { cursor: pointer; background: #1a73e8; border-color: #1a73e8; }
+    main { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 58px); }
+    aside { border-right: 1px solid #222; padding: 16px; }
+    #events { padding: 16px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; overflow: auto; max-height: calc(100vh - 58px); }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #222; font-size: 11px; }
+    .ok { background: #0d3b22; color: #81c995; }
+    .bad { background: #3b0d0d; color: #f28b82; }
+    .row { padding: 8px 0; border-bottom: 1px solid #1a1a1a; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Examiner Console</h1>
+    <input id="sessionId" placeholder="session id" size="16" />
+    <button id="connect">Connect</button>
+    <span id="status" class="pill">disconnected</span>
+  </header>
+  <main>
+    <aside>
+      <p style="color:#9aa0a6;font-size:13px;line-height:1.4">
+        Scaffold UI. Connect to a live agent session to receive heartbeats, integrity flags, and journal events.
+      </p>
+      <div id="meta"></div>
+    </aside>
+    <div id="events"></div>
+  </main>
+  <script>
+    const statusEl = document.getElementById("status");
+    const eventsEl = document.getElementById("events");
+    const metaEl = document.getElementById("meta");
+    let ws;
+
+    function log(obj) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.textContent = typeof obj === "string" ? obj : JSON.stringify(obj);
+      eventsEl.prepend(row);
+    }
+
+    document.getElementById("connect").onclick = () => {
+      const sid = document.getElementById("sessionId").value.trim();
+      if (!sid) return alert("Enter session id");
+      if (ws) ws.close();
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${proto}://${location.host}/exam/${sid}`);
+      statusEl.textContent = "connecting…";
+      ws.onopen = () => {
+        statusEl.textContent = "live";
+        statusEl.className = "pill ok";
+        metaEl.textContent = `session ${sid}`;
+      };
+      ws.onclose = () => {
+        statusEl.textContent = "disconnected";
+        statusEl.className = "pill";
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.op === "flag" || msg.type === "TAMPERED") {
+            statusEl.className = "pill bad";
+          }
+          log(msg);
+        } catch {
+          log(ev.data);
+        }
+      };
+    };
+  </script>
+</body>
+</html>

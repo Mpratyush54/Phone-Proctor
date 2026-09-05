@@ -3,8 +3,9 @@
 In a PyInstaller/cx_Freeze bundle, ``sys.frozen`` is set and assets live next
 to the executable rather than the source tree. Callers must not write into the
 install prefix; mutable data always goes under the user data directory.
-"""
 
+Also supports PyInstaller one-file (``sys._MEIPASS``) resource resolution.
+"""
 from __future__ import annotations
 
 import os
@@ -13,7 +14,7 @@ from pathlib import Path
 
 
 def is_frozen() -> bool:
-    return bool(getattr(sys, "frozen", False))
+    return bool(getattr(sys, "frozen", False)) or hasattr(sys, "_MEIPASS")
 
 
 def install_root() -> Path:
@@ -21,6 +22,21 @@ def install_root() -> Path:
     if is_frozen():
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent
+
+
+def app_root() -> Path:
+    """Directory that contains the runnable agent (or extract dir when frozen)."""
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    if is_frozen():
+        return Path(sys.executable).resolve().parent
+    # utils/paths.py -> repo root
+    return Path(__file__).resolve().parent.parent
+
+
+def resource_path(*parts: str) -> Path:
+    """Resolve a bundled resource under the app root."""
+    return app_root().joinpath(*parts)
 
 
 def user_data_root() -> Path:
@@ -34,6 +50,20 @@ def user_data_root() -> Path:
     if xdg:
         return (Path(xdg) / "phone-proctor").resolve()
     return (Path.home() / ".local" / "share" / "phone-proctor").resolve()
+
+
+def writable_data_dir(*parts: str) -> Path:
+    """
+    Per-user writable location for journals, consent, logs.
+    Never write into the frozen bundle.
+    """
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    path = base / "PhoneProctor" / Path(*parts) if parts else base / "PhoneProctor"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def logs_dir() -> Path:
@@ -78,3 +108,41 @@ def media_spool_dir() -> Path:
 
 def integrity_manifest_path() -> Path:
     return install_root() / "integrity-manifest.json"
+
+
+def asset(*parts: str) -> Path:
+    return resource_path("assets", *parts)
+
+
+def model(*parts: str) -> Path:
+    return resource_path("models", *parts)
+
+
+def config_file(name: str = "settings.yaml") -> Path:
+    # Prefer bundled config/; fall back to cwd for dev overrides
+    bundled = resource_path("config", name)
+    if bundled.is_file():
+        return bundled
+    local = Path.cwd() / "config" / name
+    return local if local.is_file() else bundled
+
+
+def yolov8_weights() -> Path:
+    for candidate in (
+        resource_path("yolov8n.pt"),
+        resource_path("models", "yolov8n.pt"),
+        Path.cwd() / "yolov8n.pt",
+    ):
+        if candidate.is_file():
+            return candidate
+    return resource_path("yolov8n.pt")
+
+
+def dashboard_html() -> Path:
+    for candidate in (
+        asset("dashboard.html"),
+        resource_path("report_template", "dashboard.html"),
+    ):
+        if candidate.is_file():
+            return candidate
+    return asset("dashboard.html")

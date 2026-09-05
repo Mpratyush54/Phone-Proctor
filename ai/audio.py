@@ -1,4 +1,3 @@
-import torch
 import numpy as np
 import pyaudio
 import threading
@@ -11,6 +10,14 @@ from collections import deque
 
 from agent.product_mode import google_stt_enabled
 from utils.paths import audio_dir
+
+# torch is optional at import time — mismatched wheels used to crash the
+# whole Windows process with a DLL entry-point dialog before soft-failing.
+try:
+    import torch
+except Exception as e:
+    torch = None
+    print(f"[WARN] torch unavailable for AudioMonitor: {e}")
 
 class AudioMonitor:
     def __init__(self, sample_rate=16000, chunk_size=512, logger=None):
@@ -48,22 +55,27 @@ class AudioMonitor:
         self.data_dir = str(audio_dir())
               
         # Load Silero VAD
-        try:
-            self.model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
-                                             model='silero_vad',
-                                             force_reload=False,
-                                             trust_repo=True)
-            (self.get_speech_timestamps,
-             self.save_audio,
-             self.read_audio,
-             self.VADIterator,
-             self.collect_chunks) = utils
-             
-            self.vad_iterator = self.VADIterator(self.model)
-            print("[INFO] Silero VAD Loaded Successfully")
-        except Exception as e:
-            print(f"[ERROR] Failed to load Silero VAD: {e}")
-            self.model = None
+        self.model = None
+        self.vad_iterator = None
+        if torch is None:
+            print("[WARN] Silero VAD skipped — install matched CPU torch via scripts/install_agent_deps.ps1")
+        else:
+            try:
+                self.model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
+                                                 model='silero_vad',
+                                                 force_reload=False,
+                                                 trust_repo=True)
+                (self.get_speech_timestamps,
+                 self.save_audio,
+                 self.read_audio,
+                 self.VADIterator,
+                 self.collect_chunks) = utils
+                 
+                self.vad_iterator = self.VADIterator(self.model)
+                print("[INFO] Silero VAD Loaded Successfully")
+            except Exception as e:
+                print(f"[ERROR] Failed to load Silero VAD: {e}")
+                self.model = None
 
         self.recognizer = sr.Recognizer()
 

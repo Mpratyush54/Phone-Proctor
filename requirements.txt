@@ -1,18 +1,28 @@
-opencv-python
-mediapipe
-numpy
-scikit-learn
-torch
-torchaudio
-pyaudio
-psutil
-scapy
-pyqt5 
-pyqtwebengine
-SpeechRecognition
-ultralytics
-websockets
-requests
-flask
-aiortc
+# Phone-Proctor Laptop Agent — core runtime (standalone-oriented)
+# Install CPU torch first (see scripts/install_agent_deps.ps1 / .sh), then:
+#   pip install -r requirements.txt
+#
+# scapy is OPTIONAL — see requirements-optional.txt
+# torch/torchaudio MUST come from requirements-torch-cpu.txt (matched +cpu wheels)
+
+numpy>=1.24,<3
+opencv-python-headless>=4.8,<5
+mediapipe>=0.10,<0.11
+scikit-learn>=1.3,<2
+psutil>=5.9
+PyQt5>=5.15,<5.16
+PyQtWebEngine>=5.15,<5.16
+websockets>=12,<16
+requests>=2.31
+PyYAML>=6.0
+ultralytics>=8.1,<9
+SpeechRecognition>=3.10
 jsonschema>=4.22.0
+
+# Audio capture — platform wheels vary; install separately if needed
+# pyaudio  # Windows: pip install pipwin && pipwin install pyaudio
+
+# WebRTC phone audio — optional for product uplink path
+# aiortc>=1.6
+# flask  # not required for agent product path
+# scapy  # see requirements-optional.txt (needs Npcap + consent)

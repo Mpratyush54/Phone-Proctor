@@ -2,6 +2,7 @@
 venv/Lib/site-packages
 venv/Scripts
 venv/
+venv/share/*
 */__pycache__
 *.pyc
 .DS_Store
@@ -27,3 +28,20 @@ coverage/
 .env
 .env.local
 infra/.terraform/
+
+# Keep runtime dashboard; ignore huge 3D scan assets if re-added
+# assets/ is NOT fully ignored — dashboard.html must ship with agent
+
+# Central server
+server/node_modules/
+
+# Packaging output
+dist/
+build/
+*.spec.bak
+
+# Local torch wheel cache (large)
+.wheelhouse/
+
+# Local Blender test renders (not committed)
+test_eevee.jpg
