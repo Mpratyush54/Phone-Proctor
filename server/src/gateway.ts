@@ -4,6 +4,8 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./log.js";
 import { globalStore } from "./store.js";
+import { hydrate } from "./db/hydrate.js";
+import { armGracefulShutdown } from "./shutdown.js";
 import { rejectUnknownMajor } from "./contracts.js";
 
 const RATE = new Map<WebSocket, { n: number; t: number }>();
@@ -31,7 +33,7 @@ export function startGateway(store = globalStore, opts?: { listen?: boolean; por
   const wss = new WebSocketServer({ server, maxPayload: 256 * 1024 });
   wss.on("connection", (ws, req) => {
     const origin = req.headers.origin;
-    if (origin && !cfg.origins.includes(origin) && cfg.production) {
+    if (origin && !cfg.origins.includes(origin)) {
       ws.close(4403, "origin");
       return;
     }
@@ -121,10 +123,19 @@ export function startGateway(store = globalStore, opts?: { listen?: boolean; por
   server.listen(port, host, () => {
     log.info({ host, port }, "gateway listening");
   });
+  armGracefulShutdown(server, "gateway");
   return server;
 }
 
 const entry = process.argv[1] || "";
 if (import.meta.url === `file://${entry}` || path.basename(entry) === "gateway.ts") {
-  startGateway();
+  hydrate()
+    .then((snap) => {
+      globalStore.loadSnapshot(snap);
+      startGateway();
+    })
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
 }

@@ -14,8 +14,8 @@ const express = require("express");
 const cors = require("cors");
 const { WebSocketServer } = require("ws");
 const { v4: uuidv4 } = require("uuid");
-const { SessionStore } = require("./store");
-const { RoomHub } = require("./rooms");
+const { SessionStore } = require("./store.cjs");
+const { RoomHub } = require("./rooms.cjs");
 
 const PORT = Number(process.env.PP_PORT || 8080);
 const store = new SessionStore();

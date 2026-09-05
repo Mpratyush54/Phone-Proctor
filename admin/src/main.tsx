@@ -5,6 +5,7 @@ import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 import { api, setCsrf } from "./api/client";
 import { Login } from "./pages/Login";
 import { Exams } from "./pages/Exams";
+import { Questions } from "./pages/Questions";
 import { ExamSetup } from "./pages/ExamSetup";
 import { CommandCenter } from "./pages/CommandCenter";
 import { Review } from "./pages/Review";
@@ -15,7 +16,8 @@ import { StudentDrawer } from "./components/StudentDrawer";
 const qc = new QueryClient();
 
 function useMe() {
-  const [me, setMe] = React.useState<Record<string, unknown> | null>(null);
+  // undefined = still loading, null = unauthenticated, object = session
+  const [me, setMe] = React.useState<Record<string, unknown> | null | undefined>(undefined);
   React.useEffect(() => {
     api("/api/v1/me")
       .then((m) => {
@@ -29,6 +31,7 @@ function useMe() {
 
 function Guard({ children, perm }: { children: React.ReactNode; perm?: string }) {
   const me = useMe();
+  if (me === undefined) return <main>Loading session…</main>;
   if (me === null) return <Navigate to="/login" replace />;
   if (perm && Array.isArray(me.permissions) && !me.permissions.includes(perm) && !me.permissions.includes("platform.ops")) {
     return <main>Missing permission {perm}</main>;
@@ -42,6 +45,7 @@ function Shell() {
       <header>
         <b>Phone-Proctor</b>
         <Link to="/exams">Exams</Link>
+        <Link to="/banks">Questions</Link>
         <Link to="/review">Review</Link>
         <Link to="/appeals">Appeals</Link>
         <Link to="/platform">Platform</Link>
@@ -50,6 +54,7 @@ function Shell() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/exams" element={<Guard perm="exam.read"><Exams /></Guard>} />
+        <Route path="/banks" element={<Guard perm="exam.read"><Questions /></Guard>} />
         <Route path="/exams/:id/setup" element={<Guard perm="exam.read"><ExamSetup /></Guard>} />
         <Route path="/exams/:id" element={<Guard perm="exam.read"><CommandCenter /></Guard>} />
         <Route path="/sessions/:id" element={<Guard perm="session.read"><StudentDrawer /></Guard>} />

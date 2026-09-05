@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { Store } from "../src/store.js";
@@ -36,15 +36,16 @@ function cookie(res: { headers: Headers }) {
   return raw.split(";")[0];
 }
 
-async function login(base: string, store: Store) {
-  const login = await req(base, "/api/v1/auth/login");
-  const body = login.json as { state: string };
-  const oidc = store.oidcTx.get(body.state)!;
-  const cb = await req(base, `/api/v1/auth/callback?state=${body.state}&nonce=${oidc.nonce}`, {
-    cookies: `pp_oidc=${encodeURIComponent(JSON.stringify({ state: body.state, nonce: oidc.nonce, verifier: "x" }))}`,
-  });
-  // consumeOidc checks pkce against hashed verifier stored at startOidc — login used random verifier
-  return cb;
+/** Mirror cookie-signature: 's:' + value + '.' + base64(hmac), '=' stripped. */
+function signCookie(value: string, secret: string): string {
+  const sig = createHmac("sha256", secret).update(value).digest("base64").replace(/=+$/, "");
+  return encodeURIComponent(`s:${value}.${sig}`);
+}
+
+const TEST_SESSION_SECRET = "dev-session-secret-change-me";
+
+function sessionCookie(raw: string): string {
+  return `pp_session=${signCookie(raw, TEST_SESSION_SECRET)}`;
 }
 
 test("production refuses missing config", () => {
@@ -63,7 +64,7 @@ test("staff oauth csrf rbac exam roster session command media finding", async ()
   const { server, base } = await listen(createApp(cfg, store));
   try {
     const sess = store.createStaffSession(seeded.orgId, seeded.userId);
-    const cookies = `pp_session=${sess.raw}`;
+    const cookies = sessionCookie(sess.raw);
     const h = { "x-csrf-token": sess.csrf, "content-type": "application/json" };
 
     const denied = await req(base, "/api/v1/exams", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
@@ -143,7 +144,7 @@ test("staff oauth csrf rbac exam roster session command media finding", async ()
     const snap = await req(base, `/api/v1/console/snapshot?exam_id=${examId}`, { cookies });
     assert.equal((snap.json as { exam_id: string }).exam_id, examId);
 
-    const up = store.presignUpload(sessionId, "image/jpeg", 100, "a".repeat(64), "snapshot");
+    const up = store.presignUpload(sessionId, "image/jpeg", 100, "a".repeat(64), "snapshot", { fakeUrl: true });
     store.verifyMedia(up.asset_id, false, "nope", false);
     assert.equal(store.media.get(up.asset_id)?.status, "quarantined");
 
@@ -153,7 +154,7 @@ test("staff oauth csrf rbac exam roster session command media finding", async ()
       headers: h,
       body: JSON.stringify({ role: "subscribe" }),
     });
-    assert.ok((live.json as { token: string }).token);
+    assert.equal(live.status, 503);
 
     const metrics = await req(base, "/metrics");
     assert.match(metrics.raw, /phoneproctor_events_ingested_total/);
@@ -187,6 +188,34 @@ test("oidc state replay and timeout", () => {
   const tx = store.oidcTx.get("s2")!;
   tx.expires = Date.now() - 1;
   assert.throws(() => store.consumeOidc("s2", "n2", "v2"));
+});
+
+test("oidc callback rejects unknown state and tampered cookies", async () => {
+  const store = new Store("pepper");
+  store.seedDev();
+  const cfg = loadConfig({ NODE_ENV: "test", ORIGIN_ALLOWLIST: "http://127.0.0.1" } as NodeJS.ProcessEnv);
+  const { server, base } = await listen(createApp(cfg, store));
+  try {
+    const forged = `pp_oidc=${signCookie("nope", TEST_SESSION_SECRET)}`;
+    const unknown = await req(base, "/api/v1/auth/callback?state=nope&code=x", { cookies: forged });
+    assert.equal(unknown.status, 401);
+
+    const mismatch = await req(base, "/api/v1/auth/callback?state=a&code=x", {
+      cookies: `pp_oidc=${signCookie("b", TEST_SESSION_SECRET)}`,
+    });
+    assert.equal(mismatch.status, 401);
+
+    const tampered = await req(base, "/api/v1/auth/callback?state=a&code=x", {
+      cookies: "pp_oidc=s:a.invalidsignature",
+    });
+    assert.equal(tampered.status, 401);
+
+    const sess = store.createStaffSession("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002");
+    const forgedSession = await req(base, "/api/v1/me", { cookies: `pp_session=${sess.raw}` });
+    assert.equal(forgedSession.status, 401);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
 });
 
 test("refresh replay revokes family", () => {

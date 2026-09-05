@@ -3,7 +3,8 @@
   "private": true,
   "version": "0.1.0",
   "description": "Central control plane for Phone-Proctor (agent + examiner relay)",
-  "main": "src/index.js",
+  "type": "module",
+  "main": "src/index.cjs",
   "engines": {
     "node": ">=20"
   },
@@ -15,8 +16,8 @@
     "test": "tsx --test tests/*.test.ts",
     "migrate": "tsx --env-file=.env src/db/migrate.ts",
     "validate:contracts": "tsx --env-file=.env src/validate-contracts.ts",
-    "start": "node --env-file=.env src/index.js",
-    "dev": "node --env-file=.env --watch src/index.js"
+    "start": "node --env-file=.env src/index.cjs",
+    "dev": "node --env-file=.env --watch src/index.cjs"
   },
   "dependencies": {
     "ajv": "^8.17.1",
@@ -24,6 +25,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "jose": "^6.2.12",
     "pg": "^8.23.0",
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",

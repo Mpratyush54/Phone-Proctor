@@ -3,6 +3,8 @@ import path from "node:path";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./log.js";
 import { globalStore } from "./store.js";
+import { hydrate } from "./db/hydrate.js";
+import { armGracefulShutdown } from "./shutdown.js";
 
 export function startWorker(store = globalStore) {
   const cfg = loadConfig();
@@ -30,6 +32,12 @@ export function startWorker(store = globalStore) {
         if (!ageOk) cmd.status = "expired";
       }
     }
+    try {
+      const { ended } = store.endExpiredSessions();
+      for (const id of ended) log.info({ sessionId: id }, "exam auto-ended: time expired");
+    } catch (err) {
+      log.warn({ err }, "expiry sweep failed");
+    }
     for (const m of store.media.values()) {
       if (m.status === "pending_verification") {
         m.attempts += 1;
@@ -48,10 +56,19 @@ export function startWorker(store = globalStore) {
   server.listen(cfg.WORKER_PORT, cfg.WORKER_HOST, () => {
     log.info({ host: cfg.WORKER_HOST, port: cfg.WORKER_PORT }, "worker listening");
   });
+  armGracefulShutdown(server, "worker");
   return server;
 }
 
 const entry = process.argv[1] || "";
 if (import.meta.url === `file://${entry}` || path.basename(entry) === "worker.ts") {
-  startWorker();
+  hydrate()
+    .then((snap) => {
+      globalStore.loadSnapshot(snap);
+      startWorker();
+    })
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
 }

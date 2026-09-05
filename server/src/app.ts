@@ -1,10 +1,12 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cookieParser from "cookie-parser";
-import { randomBytes, createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApiError, Store, type StaffContext } from "./store.js";
 import type { AppConfig } from "./config.js";
+import { beginOidc, completeOidc } from "./oidc.js";
+import { objectStoreConfigured, presignUrl, signThumbnail, verifyThumbnail } from "./media.js";
 import { createLogger, requestId } from "./log.js";
 
 const OPENAPI = {
@@ -15,13 +17,28 @@ const OPENAPI = {
     "/api/v1/auth/login": { get: { summary: "Start OIDC" } },
     "/api/v1/auth/callback": { get: { summary: "OIDC callback" } },
     "/api/v1/auth/logout": { post: { summary: "Logout" } },
-    "/api/v1/auth/step-up": { post: { summary: "OIDC step-up proof" } },
+    "/api/v1/auth/step-up": { post: { summary: "Start OIDC step-up (returns login URL)" } },
+    "/api/v1/auth/step-up/callback": { get: { summary: "Complete OIDC step-up" } },
     "/api/v1/me": { get: { summary: "Current staff" } },
     "/api/v1/exams": { get: { summary: "List exams" }, post: { summary: "Create exam" } },
     "/api/v1/exams/{id}/open": { post: { summary: "Open exam" } },
     "/api/v1/exams/{id}/policy": { patch: { summary: "Update policy" } },
     "/api/v1/exams/{id}/roster": { post: { summary: "Import roster" } },
     "/api/v1/exams/{id}/staff": { post: { summary: "Assign staff" } },
+    "/api/v1/banks": { get: { summary: "List question banks" }, post: { summary: "Create bank" } },
+    "/api/v1/banks/{id}/groups": { post: { summary: "Add question group" } },
+    "/api/v1/groups/{id}/variants": { post: { summary: "Add question variant" } },
+    "/api/v1/variants/{id}/deprecate": { post: { summary: "Deprecate variant" } },
+    "/api/v1/banks/{id}/publish": { post: { summary: "Publish content version" } },
+    "/api/v1/exams/{id}/content": { patch: { summary: "Bind content version" } },
+    "/api/v1/enrollments/{id}/candidate-code": { post: { summary: "Issue candidate login code" } },
+    "/api/v1/enrollments/{id}/candidate-codes": { get: { summary: "Candidate code status" } },
+    "/api/v1/sessions/{id}/answers": { get: { summary: "Session answers (staff)" } },
+    "/api/v1/candidate/login": { post: { summary: "Candidate login with code" } },
+    "/api/v1/candidate/logout": { post: { summary: "Candidate logout" } },
+    "/api/v1/candidate/next-item": { get: { summary: "Next exam item (one by one)" } },
+    "/api/v1/candidate/answer": { post: { summary: "Submit answer" } },
+    "/api/v1/candidate/status": { get: { summary: "Candidate progress" } },
     "/api/v1/exams/{id}/readiness": { get: { summary: "Readiness summary" } },
     "/api/v1/exams/{id}/commands/bulk": { post: { summary: "Bulk commands" } },
     "/api/v1/enrollments/{id}/token": { post: { summary: "Issue enrollment token" } },
@@ -70,11 +87,22 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "512kb" }));
-  app.use(cookieParser());
+  app.use(cookieParser(cfg.SESSION_SECRET));
   app.use((req, res, next) => {
     req.requestId = requestId();
     res.setHeader("x-request-id", req.requestId);
     const origin = req.headers.origin;
+    if (origin) res.setHeader("Vary", "Origin");
+    if (req.method === "OPTIONS") {
+      if (origin && cfg.origins.includes(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+        res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "content-type,x-csrf-token,x-request-id");
+        res.setHeader("Access-Control-Max-Age", "600");
+      }
+      return res.status(204).end();
+    }
     if (origin && !cfg.origins.includes(origin)) {
       if (req.headers.upgrade === "websocket" || req.path.startsWith("/api") || req.path.startsWith("/console")) {
         return res.status(403).json({ code: "CSRF_DENIED", error: "origin" });
@@ -99,8 +127,57 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     next();
   });
 
+  /** Verified (signed) cookie value, or null when missing/tampered. */
+  function signedCookie(req: Request, name: string): string | null {
+    const value: unknown = (req.signedCookies as Record<string, unknown> | undefined)?.[name];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  }
+
+  function sessionCookie(res: Response, name: string, value: string, maxAgeMs?: number) {
+    res.cookie(name, value, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: cfg.production,
+      signed: true,
+      path: "/",
+      ...(maxAgeMs !== undefined ? { maxAge: maxAgeMs } : {}),
+    });
+  }
+
+  /** Resolve the staff member for an OIDC identity. No silent demo provisioning. */
+  function resolveStaff(issuer: string, sub: string, email?: string, name?: string): { orgId: string; userId: string } {
+    const user = store.findUser(issuer, sub);
+    if (!user) {
+      if (
+        cfg.BOOTSTRAP_ADMIN_EMAIL &&
+        email &&
+        email.toLowerCase() === cfg.BOOTSTRAP_ADMIN_EMAIL.toLowerCase()
+      ) {
+        return store.bootstrapAdmin(email, name || email, issuer, sub);
+      }
+      throw new ApiError("AUTH_DENIED", "no account for this identity", 403);
+    }
+    if (email) {
+      try {
+        store.syncUserProfile(user.id, email, name || user.name);
+      } catch {
+        throw new ApiError("AUTH_DENIED", "identity conflict", 403);
+      }
+    }
+    const memberships = store.membershipsFor(user.id);
+    if (memberships.length === 0) throw new ApiError("AUTH_DENIED", "no organization membership", 403);
+    if (memberships.length > 1) {
+      throw new ApiError(
+        "ORG_SELECTION_REQUIRED",
+        "multiple memberships",
+        409,
+      );
+    }
+    return { orgId: memberships[0].orgId, userId: user.id };
+  }
+
   function staffFrom(req: Request): StaffContext {
-    const raw = req.cookies?.pp_session;
+    const raw = signedCookie(req, "pp_session");
     if (!raw) throw new ApiError("AUTH_DENIED", "no session", 401);
     const ctx = store.lookupStaff(raw);
     if (!ctx) throw new ApiError("AUTH_DENIED", "invalid session", 401);
@@ -116,51 +193,94 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   app.get("/health/ready", (_req, res) => res.json({ status: "ready", service: "api", checks: store.health() }));
   app.get("/api/v1/openapi.json", (_req, res) => res.json(OPENAPI));
 
-  app.get("/api/v1/auth/login", (req, res) => {
-    const state = randomBytes(16).toString("hex");
-    const nonce = randomBytes(16).toString("hex");
-    const verifier = randomBytes(32).toString("hex");
-    store.startOidc(state, nonce, verifier);
-    res.cookie("pp_oidc", JSON.stringify({ state, nonce, verifier }), { httpOnly: true, sameSite: "lax", secure: cfg.production });
-    const url = `${cfg.OIDC_ISSUER}/auth?client_id=${cfg.OIDC_CLIENT_ID}&redirect_uri=${encodeURIComponent(cfg.OIDC_REDIRECT_URL)}&state=${state}&nonce=${nonce}&code_challenge=dev&code_challenge_method=S256&response_type=code&scope=openid%20email`;
-    res.json({ url, state });
+  app.get("/api/v1/auth/login", async (req, res, next) => {
+    try {
+      const { state, url } = await beginOidc(cfg, store);
+      sessionCookie(res, "pp_oidc", state, 5 * 60_000);
+      res.json({ url, state });
+    } catch (err) {
+      next(err);
+    }
   });
 
-  app.get("/api/v1/auth/callback", (req, res) => {
-    const cookie = req.cookies?.pp_oidc;
-    const parsed = cookie ? JSON.parse(cookie) : {};
-    const state = String(req.query.state || parsed.state);
-    const nonce = String(req.query.nonce || parsed.nonce);
-    const verifier = String(parsed.verifier || "dev-verifier");
-    store.consumeOidc(state, nonce, verifier);
-    const { orgId, userId } = [...store.memberships.values()][0] || store.seedDev();
-    const sess = store.createStaffSession(orgId, userId);
-    res.cookie("pp_session", sess.raw, { httpOnly: true, sameSite: "lax", secure: cfg.production });
-    res.json({ ok: true, csrf: sess.csrf, org_id: orgId });
+  app.get("/api/v1/auth/callback", async (req, res, next) => {
+    try {
+      const cookieState = signedCookie(req, "pp_oidc");
+      const state = String(req.query.state || "");
+      const code = String(req.query.code || "");
+      if (req.query.error) {
+        throw new ApiError("AUTH_DENIED", `provider refused: ${String(req.query.error_description || req.query.error)}`, 401);
+      }
+      if (!cookieState || !state || cookieState !== state) {
+        throw new ApiError("AUTH_DENIED", "state mismatch", 401);
+      }
+      if (!code) throw new ApiError("AUTH_DENIED", "missing code", 401);
+      const claims = await completeOidc(cfg, store, state, code);
+      const { orgId, userId } = resolveStaff(claims.issuer, claims.sub, claims.email, claims.name);
+      const sess = store.createStaffSession(orgId, userId);
+      res.clearCookie("pp_oidc", { path: "/" });
+      sessionCookie(res, "pp_session", sess.raw);
+      res.json({ ok: true, csrf: sess.csrf, org_id: orgId });
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.post("/api/v1/auth/dev-login", (req, res) => {
-    if (cfg.production) throw new ApiError("AUTH_DENIED", "dev login disabled", 401);
-    const seeded = [...store.memberships.values()][0] || store.seedDev();
-    const orgId = "orgId" in seeded ? seeded.orgId : seeded.orgId;
-    const userId = "userId" in seeded ? seeded.userId : seeded.userId;
-    const sess = store.createStaffSession(orgId, userId);
-    res.cookie("pp_session", sess.raw, { httpOnly: true, sameSite: "lax", secure: false });
-    res.json({ ok: true, csrf: sess.csrf, org_id: orgId });
+    if (!cfg.allowDevLogin) throw new ApiError("AUTH_DENIED", "dev login disabled", 401);
+    const first = [...store.memberships.values()][0];
+    if (!first) throw new ApiError("AUTH_DENIED", "no staff users provisioned", 503);
+    const sess = store.createStaffSession(first.orgId, first.userId);
+    sessionCookie(res, "pp_session", sess.raw);
+    res.json({ ok: true, csrf: sess.csrf, org_id: first.orgId });
   });
 
   app.post("/api/v1/auth/logout", (req, res) => {
-    const raw = req.cookies?.pp_session;
+    const raw = signedCookie(req, "pp_session");
     if (raw) store.logout(raw);
-    res.clearCookie("pp_session");
+    res.clearCookie("pp_session", { path: "/" });
     res.json({ ok: true });
   });
 
-  app.post("/api/v1/auth/step-up", (req, res) => {
-    const raw = req.cookies?.pp_session;
-    if (!raw) throw new ApiError("AUTH_DENIED", "no session", 401);
-    store.markStepUp(raw);
-    res.json({ ok: true, acr: "step-up" });
+  app.post("/api/v1/auth/step-up", async (req, res, next) => {
+    try {
+      staffFrom(req);
+      const { state, url } = await beginOidc(cfg, store, {
+        prompt: "login",
+        acrValues: cfg.OIDC_ACR_VALUES,
+        maxAge: cfg.OIDC_MAX_AGE ?? 0,
+      });
+      sessionCookie(res, "pp_stepup", state, 5 * 60_000);
+      res.json({ url, state });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/v1/auth/step-up/callback", async (req, res, next) => {
+    try {
+      const raw = signedCookie(req, "pp_session");
+      if (!raw) throw new ApiError("AUTH_DENIED", "no session", 401);
+      const cookieState = signedCookie(req, "pp_stepup");
+      const state = String(req.query.state || "");
+      const code = String(req.query.code || "");
+      if (req.query.error) {
+        throw new ApiError("AUTH_DENIED", `provider refused: ${String(req.query.error_description || req.query.error)}`, 401);
+      }
+      if (!cookieState || !state || cookieState !== state) {
+        throw new ApiError("AUTH_DENIED", "state mismatch", 401);
+      }
+      if (!code) throw new ApiError("AUTH_DENIED", "missing code", 401);
+      await completeOidc(cfg, store, state, code, {
+        requireFreshAuthSeconds: 5 * 60,
+        requireAcr: cfg.OIDC_ACR_VALUES,
+      });
+      store.markStepUp(raw);
+      res.clearCookie("pp_stepup", { path: "/" });
+      res.json({ ok: true, acr: cfg.OIDC_ACR_VALUES || "step-up" });
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.get("/api/v1/me", (req, res) => {
@@ -261,7 +381,10 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   });
 
   app.post("/api/v1/sessions/:id/media/uploads", (req, res) => {
-    res.json(store.presignUpload(req.params.id, req.body.content_type, req.body.bytes, req.body.sha256, req.body.kind || "snapshot"));
+    res.json(store.presignUpload(
+      req.params.id, req.body.content_type, req.body.bytes, req.body.sha256, req.body.kind || "snapshot",
+      { fakeUrl: cfg.mediaFake },
+    ));
   });
 
   app.post("/api/v1/media/:id/verify", (req, res) => {
@@ -269,11 +392,50 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   });
 
   app.get("/api/v1/sessions/:id/thumbnail", (req, res) => {
-    res.json(store.signedThumbnail(staffFrom(req), req.params.id));
+    const ctx = staffFrom(req);
+    const result = store.signedThumbnail(ctx, req.params.id);
+    if (!result.available) return res.json(result);
+    const expiresAt = Date.now() + result.expires_s * 1000;
+    const sig = signThumbnail(cfg.SESSION_SECRET, result.asset_id, expiresAt);
+    res.json({
+      ...result,
+      url: `/api/v1/media/${result.asset_id}/thumb?exp=${expiresAt}&sig=${sig}`,
+    });
   });
 
-  app.post("/api/v1/sessions/:id/livekit", (req, res) => {
-    res.json(store.livekitToken(staffFrom(req), req.params.id, req.body.role || "subscribe"));
+  app.get("/api/v1/media/:id/thumb", (req, res, next) => {
+    try {
+      const ctx = staffFrom(req);
+      const asset = store.media.get(req.params.id);
+      if (!asset) throw new ApiError("NOT_FOUND", "asset", 404);
+      store.assertOrg(ctx, asset.orgId);
+      const exp = Number(req.query.exp || 0);
+      const sig = String(req.query.sig || "");
+      if (!verifyThumbnail(cfg.SESSION_SECRET, asset.id, exp, sig)) {
+        throw new ApiError("AUTH_DENIED", "thumbnail token invalid or expired", 401);
+      }
+      if (asset.status !== "verified") throw new ApiError("NOT_FOUND", "asset not available", 404);
+      store.recordAudit({ orgId: asset.orgId, actorId: ctx.userId, action: "media.read", payload: { assetId: asset.id } });
+      const osc = {
+        endpoint: process.env.OBJECT_STORE_ENDPOINT || "http://127.0.0.1:9000",
+        bucket: process.env.OBJECT_STORE_BUCKET || "phone-proctor",
+        region: process.env.OBJECT_STORE_REGION || "us-east-1",
+        accessKey: process.env.OBJECT_STORE_ACCESS_KEY,
+        secretKey: process.env.OBJECT_STORE_SECRET_KEY,
+      };
+      if (!objectStoreConfigured(osc)) throw new ApiError("MEDIA_UNCONFIGURED", "object store not configured", 503);
+      res.redirect(302, presignUrl(osc, "GET", asset.key, { expiresS: 60 }));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/sessions/:id/livekit", async (req, res, next) => {
+    try {
+      res.json(await store.livekitToken(staffFrom(req), req.params.id, req.body.role || "subscribe", { fake: cfg.mediaFake }));
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.post("/api/v1/sessions/:id/findings", (req, res) => {
@@ -298,6 +460,141 @@ export function createApp(cfg: AppConfig, store: Store): Express {
 
   app.post("/api/v1/exams/:id/staff", (req, res) => {
     res.json(store.assignStaff(staffFrom(req), req.params.id, req.body.user_id, req.body.role || "invigilator"));
+  });
+
+  /* ---------------- exam content (staff) ---------------- */
+
+  app.post("/api/v1/banks", (req, res) => {
+    res.json(store.createBank(staffFrom(req), req.body.name));
+  });
+
+  app.get("/api/v1/banks", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "exam.read");
+    res.json({
+      items: [...store.banks.values()].filter((b) => b.orgId === ctx.orgId).map((b) => ({
+        ...b,
+        groups: [...store.qgroups.values()].filter((g) => g.bankId === b.id).sort((x, y) => x.position - y.position).map((g) => ({
+          ...g,
+          variants: [...store.variants.values()].filter((v) => v.groupId === g.id).map((v) => ({
+            id: v.id, position: v.position, stem: v.stem, qtype: v.qtype,
+            per_question_s: v.perQuestionS ?? null, deprecated: !!v.deprecated,
+            content_version_id: v.contentVersionId ?? null,
+            options: [...store.qoptions.values()].filter((o) => o.variantId === v.id)
+              .sort((x, y) => x.position - y.position).map((o) => ({ id: o.id, label: o.label })),
+          })),
+        })),
+        versions: [...store.contentVersions.values()].filter((v) => v.bankId === b.id).sort((x, y) => x.version - y.version),
+      })),
+    });
+  });
+
+  app.post("/api/v1/banks/:id/groups", (req, res) => {
+    res.json(store.createGroup(staffFrom(req), req.params.id, {
+      title: req.body.title,
+      position: req.body.position,
+      marks: req.body.marks,
+      negativeMarks: req.body.negative_marks,
+      rubric: req.body.rubric,
+    }));
+  });
+
+  app.post("/api/v1/groups/:id/variants", (req, res) => {
+    res.json(store.createVariant(staffFrom(req), req.params.id, {
+      stem: req.body.stem,
+      qtype: req.body.qtype,
+      perQuestionS: req.body.per_question_s,
+      position: req.body.position,
+      options: req.body.options || [],
+    }));
+  });
+
+  app.post("/api/v1/variants/:id/deprecate", (req, res) => {
+    res.json(store.deprecateVariant(staffFrom(req), req.params.id));
+  });
+
+  app.post("/api/v1/banks/:id/publish", (req, res) => {
+    res.json(store.publishBank(staffFrom(req), req.params.id));
+  });
+
+  app.patch("/api/v1/exams/:id/content", (req, res) => {
+    res.json(store.bindExamContent(staffFrom(req), req.params.id, {
+      contentVersionId: req.body.content_version_id,
+      allowBackNavigation: req.body.allow_back_navigation,
+      durationS: req.body.duration_s,
+    }));
+  });
+
+  app.post("/api/v1/enrollments/:id/candidate-code", (req, res) => {
+    res.json(store.issueCandidateCode(staffFrom(req), req.params.id));
+  });
+
+  app.get("/api/v1/enrollments/:id/candidate-codes", (req, res) => {
+    res.json({ items: store.candidateCodeStatus(staffFrom(req), req.params.id) });
+  });
+
+  app.get("/api/v1/sessions/:id/answers", (req, res) => {
+    res.json({ items: store.sessionAnswers(staffFrom(req), req.params.id) });
+  });
+
+  /* ---------------- candidate exam (pp_candidate grant cookie) ---------------- */
+
+  function candidateFrom(req: Request): { sessionId: string; enrollmentId: string; csrf: string } {
+    const raw = signedCookie(req, "pp_candidate");
+    if (!raw) throw new ApiError("AUTH_DENIED", "no candidate session", 401);
+    const grant = store.candidateFromGrant(raw);
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+      const csrf = req.headers["x-csrf-token"];
+      if (!csrf || csrf !== grant.csrf) throw new ApiError("CSRF_DENIED", "csrf", 403);
+    }
+    return grant;
+  }
+
+  app.post("/api/v1/candidate/login", (req, res, next) => {
+    try {
+      const code = String(req.body.code || "");
+      if (!code) throw new ApiError("VALIDATION", "code required", 400);
+      const result = store.redeemCandidateCode(code);
+      sessionCookie(res, "pp_candidate", result.grant);
+      res.json({ csrf: result.csrf, session_id: result.session_id, exam: result.exam });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/candidate/logout", (req, res) => {
+    res.clearCookie("pp_candidate", { path: "/" });
+    res.json({ ok: true });
+  });
+
+  app.get("/api/v1/candidate/next-item", (req, res, next) => {
+    try {
+      res.json(store.nextItem(candidateFrom(req).sessionId));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/v1/candidate/answer", (req, res, next) => {
+    try {
+      const grant = candidateFrom(req);
+      res.json(store.submitAnswer(
+        grant.sessionId,
+        String(req.body.variant_id || ""),
+        Array.isArray(req.body.option_ids) ? req.body.option_ids.map(String) : [],
+        String(req.body.text_answer || ""),
+      ));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get("/api/v1/candidate/status", (req, res, next) => {
+    try {
+      res.json(store.candidateStatus(candidateFrom(req).sessionId));
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.post("/api/v1/exams/:id/commands/bulk", (req, res) => {
