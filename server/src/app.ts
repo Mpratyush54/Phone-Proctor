@@ -66,6 +66,7 @@ const OPENAPI = {
     "/api/v1/media/inventory": { get: { summary: "Reconcile media inventory" } },
     "/api/v1/health/aggregate": { get: { summary: "Health aggregator" } },
     "/api/v1/platform/view": { get: { summary: "Tenant-blind platform view" } },
+    "/api/v1/admin/users": { get: { summary: "User directory (platform ops)" } },
     "/health/live": { get: { summary: "Liveness" } },
     "/health/ready": { get: { summary: "Readiness" } },
     "/metrics": { get: { summary: "Prometheus metrics" } },
@@ -691,6 +692,23 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     const ctx = staffFrom(req);
     store.require(ctx, "platform.ops");
     res.json(store.platformView());
+  });
+
+  app.get("/api/v1/admin/users", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "platform.ops");
+    res.json({
+      items: [...store.users.values()].map((u) => ({
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        orgs: store.membershipsFor(u.id).map((m) => ({
+          org_id: m.orgId,
+          org_name: m.org?.name,
+          roles: store.roles.filter((r) => r.orgId === m.orgId && r.userId === u.id).map((r) => r.role),
+        })),
+      })),
+    });
   });
 
   app.get("/metrics", (_req, res) => {

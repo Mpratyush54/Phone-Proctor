@@ -170,6 +170,7 @@ export class Store {
   seedDev() {
     const orgId = "00000000-0000-0000-0000-000000000001";
     const userId = "00000000-0000-0000-0000-000000000002";
+    if (this.orgs.has(orgId) && this.users.has(userId)) return { orgId, userId };
     this.orgs.set(orgId, { id: orgId, name: "Demo Org", slug: "demo" });
     this.users.set(userId, { id: userId, email: "staff@example.com", issuer: "http://127.0.0.1:5556", subject: "staff-1", name: "Demo Staff" });
     this.addMembership(orgId, userId);

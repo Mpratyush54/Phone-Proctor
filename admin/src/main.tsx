@@ -5,6 +5,7 @@ import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react
 import { api, setCsrf } from "./api/client";
 import "./styles.css";
 import { Login } from "./pages/Login";
+import { Overview } from "./pages/Overview";
 import { Exams } from "./pages/Exams";
 import { Questions } from "./pages/Questions";
 import { ExamSetup } from "./pages/ExamSetup";
@@ -51,6 +52,7 @@ function Nav() {
   const loc = useLocation();
   const me = useMe();
   const links = [
+    ["/overview", "Overview"],
     ["/exams", "Exams"],
     ["/banks", "Questions"],
     ["/review", "Review"],
@@ -92,6 +94,7 @@ function Shell() {
         <div className="content">
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/overview" element={<Guard perm="platform.ops"><Overview /></Guard>} />
             <Route path="/exams" element={<Guard perm="exam.read"><Exams /></Guard>} />
             <Route path="/banks" element={<Guard perm="exam.read"><Questions /></Guard>} />
             <Route path="/exams/:id/setup" element={<Guard perm="exam.read"><ExamSetup /></Guard>} />
