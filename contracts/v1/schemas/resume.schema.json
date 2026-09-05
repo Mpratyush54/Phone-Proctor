@@ -1,0 +1,25 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/resume.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Resume",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "type", "msg_id", "ts", "payload"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "const": "resume" },
+    "msg_id": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["device_credential_id", "session_id", "last_acked_seq"],
+      "properties": {
+        "device_credential_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "last_acked_seq": { "type": "integer", "minimum": 0 },
+        "connection_generation": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

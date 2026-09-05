@@ -1,0 +1,16 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/envelope.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ControlPlaneEnvelope",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "type", "msg_id", "ts"],
+  "properties": {
+    "v": { "type": "integer", "const": 1, "description": "Major protocol version. Unknown majors are rejected." },
+    "type": { "type": "string", "minLength": 1 },
+    "msg_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  }
+}

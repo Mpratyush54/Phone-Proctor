@@ -17,12 +17,13 @@ except ImportError:
     print("⚠️ OpenCV not installed. Video decoding disabled.")
 
 # Import new modules
+from agent.product_mode import lan_bind_host
 from .webrtc_manager import WebRTCManager
 from .tcp_server import TCPServer
 
 class ProctorServer:
-    def __init__(self, host='0.0.0.0', port=5000, tcp_port=5001):
-        self.host = host
+    def __init__(self, host=None, port=5000, tcp_port=5001):
+        self.host = host if host is not None else lan_bind_host()
         self.port = port
         self.tcp_port = tcp_port
         self.server_loop = None
@@ -98,6 +99,10 @@ class ProctorServer:
                 await self.tcp_server.stop()
             except Exception as e:
                 print(f"[NET] TCP shutdown error: {e}")
+            try:
+                await self.webrtc_manager.close()
+            except Exception as e:
+                print(f"[NET] WebRTC shutdown error: {e}")
 
         self.server_loop.run_until_complete(start())
 
@@ -359,5 +364,12 @@ class ProctorServer:
         }
     
     def get_latest_frame(self):
-        """Returns the latest frame from phone if available"""
-        return self.latest_frame
+        """Returns a copy of the latest phone frame under the shared lock."""
+        with self.frame_lock:
+            frame = self.latest_frame
+            if frame is None:
+                return None
+            try:
+                return frame.copy()
+            except Exception:
+                return frame

@@ -1,5 +1,7 @@
+# Python
 venv/Lib/site-packages
 venv/Scripts
+venv/
 */__pycache__
 *.pyc
 .DS_Store
@@ -7,10 +9,21 @@ venv/Scripts
 .vscode
 .idea
 logs/
-venv/share/*\
 *.log
 data/*
 Laboratory_Project_Report_SH(1).zip
 report_template/*
 *.zip
 assets/
+
+# Node / TypeScript
+node_modules/
+server/dist/
+admin/dist/
+server/public/
+*.tsbuildinfo
+coverage/
+.pytest_cache/
+.env
+.env.local
+infra/.terraform/
