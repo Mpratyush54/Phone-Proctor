@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "type": "event",
+  "seq_no": 1,
+  "batch_id": "b1",
+  "payload_hash": "91ee0ca5d3cb38524804b5e60edc8a7a29120bc26bd80c2e7c4d1aec14af444d",
+  "payload": {
+    "event_type": "VIOLATION",
+    "detail": "focus lost"
+  }
+}

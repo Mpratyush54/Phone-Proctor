@@ -1,0 +1,25 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/command-result.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CommandResult",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "type", "payload"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "const": "command-result" },
+    "msg_id": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" },
+    "payload": {
+      "type": "object",
+      "required": ["command_id", "ok"],
+      "additionalProperties": true,
+      "properties": {
+        "command_id": { "type": "string" },
+        "ok": { "type": "boolean" },
+        "observed_lifecycle_state": { "type": "string" },
+        "error": { "type": "string" }
+      }
+    }
+  }
+}

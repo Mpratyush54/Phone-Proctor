@@ -1,0 +1,18 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/health.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Health",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["status"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "const": "health" },
+    "status": { "type": "string", "enum": ["live", "ready", "degraded", "down"] },
+    "service": { "type": "string" },
+    "checks": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

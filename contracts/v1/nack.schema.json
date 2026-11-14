@@ -1,0 +1,25 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/nack.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Nack",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "type", "payload"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "const": "nack" },
+    "msg_id": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" },
+    "payload": {
+      "type": "object",
+      "required": ["seq_no", "code", "terminal"],
+      "additionalProperties": true,
+      "properties": {
+        "seq_no": { "type": "integer", "minimum": 1 },
+        "code": { "type": "string" },
+        "terminal": { "type": "boolean" },
+        "detail": { "type": "string" }
+      }
+    }
+  }
+}

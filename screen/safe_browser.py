@@ -1,7 +1,6 @@
 import sys
 import os
 import json
-import psutil
 
 # 🔥 CRITICAL: Enable WebRTC + Media + Secure Overrides
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
@@ -132,14 +131,9 @@ class SecurePage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
         print(f"[JS] {message}")
         if message.startswith("CMD:KILL:"):
-            try:
-                pid_str = message.split(":")[2]
-                pid = int(pid_str)
-                proc = psutil.Process(pid)
-                proc.terminate()
-                print(f"[PY] Terminated process {pid}")
-            except Exception as e:
-                print(f"[PY] Failed to terminate {pid_str}: {e}")
+            # Arbitrary PID termination is removed (A3). Log and ignore.
+            print("[PY] CMD:KILL ignored — arbitrary process termination is disabled")
+            return
 
     def acceptNavigationRequest(self, url, _type, isMainFrame):
         host = url.host()
@@ -358,7 +352,10 @@ class SafeBrowser(QMainWindow):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
-            self.close()
+            # Escape must not end the exam (A3).
+            print("[UI] Escape ignored — exam continues")
+            return
+        super().keyPressEvent(event)
 
     def closeEvent(self, event):
         # Stop the encoder worker thread cleanly.

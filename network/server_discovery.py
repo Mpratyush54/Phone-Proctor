@@ -2,12 +2,16 @@ import socket
 import threading
 import time
 
+from agent.product_mode import lan_bind_host
+
+
 class DiscoveryServer:
-    def __init__(self, tcp_port=5000, udp_port=5001):
+    def __init__(self, tcp_port=5000, udp_port=5001, bind_host=None):
         self.tcp_port = tcp_port
         self.udp_port = udp_port
         self.running = False
         self.sock = None
+        self.bind_host = bind_host if bind_host is not None else lan_bind_host()
 
     def start(self):
         """Starts the UDP discovery listener and announcer."""
@@ -33,7 +37,7 @@ class DiscoveryServer:
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         
         try:
-            self.sock.bind(('0.0.0.0', self.udp_port))
+            self.sock.bind((self.bind_host, self.udp_port))
         except Exception as e:
             print(f"[DISCOVERY] ❌ Failed to bind UDP port: {e}")
             return

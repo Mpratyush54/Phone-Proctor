@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "type": "command-result",
+  "payload": {
+    "command_id": "c1",
+    "ok": true
+  }
+}

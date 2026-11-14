@@ -6,9 +6,10 @@ from datetime import datetime
 
 
 class EventLogger:
-    def __init__(self, base_dir="data/dataset"):
+    def __init__(self, base_dir=None):
+        from utils.paths import session_data_dir
         self.session_id = str(uuid.uuid4())[:8]
-        self.base_dir = base_dir
+        self.base_dir = base_dir or str(session_data_dir())
         self.session_dir = os.path.join(self.base_dir, self.session_id)
         self.images_dir = os.path.join(self.session_dir, "images")
         self.log_file = os.path.join(self.session_dir, "events.jsonl")

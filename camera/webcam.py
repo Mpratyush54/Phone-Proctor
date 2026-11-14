@@ -1,24 +1,26 @@
 import cv2
-
+import threading
+import subprocess
+import sys
 
 BLOCKED_KEYWORDS = ["virtual", "phone", "link", "obs"]
 
-
-import subprocess
 
 class Webcam:
     def __init__(self, camera_id=None, width=640, height=480):
         self.width = width
         self.height = height
+        self._lock = threading.Lock()
+        self._released = False
 
         self.camera_id = self._select_physical_camera() if camera_id is None else camera_id
         if self.camera_id == -1:
              raise RuntimeError("❌ No physical webcam found (All available cameras are blocked/virtual)")
-             
-        self.cap = cv2.VideoCapture(self.camera_id, cv2.CAP_DSHOW) # Prefer DirectShow for better name mapping if possible
+
+        backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+        self.cap = cv2.VideoCapture(self.camera_id, backend)
 
         if not self.cap.isOpened():
-            # Fallback
             self.cap = cv2.VideoCapture(self.camera_id)
 
         if not self.cap.isOpened():
@@ -65,7 +67,7 @@ class Webcam:
              # Heuristic: Test each index. If it opens, check if "corresponding" name is blocked.
             
             for idx in range(10): # Check first 10 indices
-                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+                cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY)
                 if cap.isOpened():
                     # We have a working camera at this index.
                     # Does it match a blocked name?
@@ -106,10 +108,14 @@ class Webcam:
              return -1
 
     def is_opened(self):
-        return self.cap.isOpened()
+        with self._lock:
+            return bool(self.cap is not None and self.cap.isOpened())
 
     def read(self):
-        ret, frame = self.cap.read()
+        with self._lock:
+            if self._released or self.cap is None:
+                return None
+            ret, frame = self.cap.read()
         return frame if ret else None
 
     def check_tampering(self, frame):
@@ -142,12 +148,24 @@ class Webcam:
         return False
 
     def release(self):
-        if self.cap.isOpened():
-            self.cap.release()
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+            if self.cap is not None:
+                try:
+                    if self.cap.isOpened():
+                        self.cap.release()
+                finally:
+                    self.cap = None
+
     def get_signature(self):
-        return (
-        self.cap.get(cv2.CAP_PROP_FRAME_WIDTH),
-        self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
-        self.cap.get(cv2.CAP_PROP_FPS),
-    )
+        with self._lock:
+            if self.cap is None:
+                return (0, 0, 0)
+            return (
+                self.cap.get(cv2.CAP_PROP_FRAME_WIDTH),
+                self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT),
+                self.cap.get(cv2.CAP_PROP_FPS),
+            )
 

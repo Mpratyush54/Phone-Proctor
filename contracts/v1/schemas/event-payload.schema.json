@@ -1,0 +1,19 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/event-payload.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EventPayload",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["event_type"],
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": ["METRICS", "VIOLATION", "INFO", "AUDIO", "NETWORK", "LIFECYCLE", "COMMAND_RECEIPT", "COMMAND_RESULT"]
+    },
+    "observed_at": { "type": "number" },
+    "gaze_h": { "type": "number" },
+    "gaze_v": { "type": "number" },
+    "face_count": { "type": "integer", "minimum": 0 },
+    "detail": { "type": "string" }
+  }
+}

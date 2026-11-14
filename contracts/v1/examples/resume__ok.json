@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "type": "resume",
+  "msg_id": "11111111-1111-1111-1111-111111111111",
+  "ts": "2026-01-01T00:00:00Z",
+  "payload": {
+    "device_credential_id": "dev-1",
+    "session_id": "sess-1",
+    "last_acked_seq": 0
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/hello.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hello",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "type", "msg_id", "ts", "payload"],
+  "properties": {
+    "v": { "const": 1 },
+    "type": { "const": "hello" },
+    "msg_id": { "type": "string" },
+    "ts": { "type": "string", "format": "date-time" },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["device_credential_id", "session_id"],
+      "properties": {
+        "device_credential_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "agent_version": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/console-delta.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConsoleDelta",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["exam_id", "stream_seq", "op"],
+  "properties": {
+    "exam_id": { "type": "string" },
+    "stream_seq": { "type": "integer", "minimum": 1 },
+    "op": { "type": "string", "enum": ["upsert", "remove", "heartbeat", "event"] },
+    "session_id": { "type": "string" },
+    "patch": { "type": "object" }
+  }
+}

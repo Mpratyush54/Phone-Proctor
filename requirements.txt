@@ -16,3 +16,4 @@ requests
 flask
 aiortc
 PyYAML
+jsonschema>=4.22.0

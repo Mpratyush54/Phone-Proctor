@@ -1,0 +1,31 @@
+{
+  "$id": "https://phone-proctor.local/contracts/v1/console-snapshot.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConsoleSnapshot",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["exam_id", "stream_seq", "sessions"],
+  "properties": {
+    "exam_id": { "type": "string" },
+    "stream_seq": { "type": "integer", "minimum": 0 },
+    "readiness": { "type": "string", "enum": ["Incident", "Blocked", "Degraded", "Ready"] },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["session_id", "lifecycle", "connectivity"],
+        "properties": {
+          "session_id": { "type": "string" },
+          "display_name": { "type": "string" },
+          "lifecycle": { "type": "string" },
+          "connectivity": { "type": "string" },
+          "attention": { "type": "string" },
+          "heartbeat_age_ms": { "type": "integer" },
+          "claim_owner": { "type": ["string", "null"] },
+          "thumbnail_available": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

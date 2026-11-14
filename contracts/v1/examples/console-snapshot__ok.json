@@ -1,0 +1,12 @@
+{
+  "exam_id": "e1",
+  "stream_seq": 0,
+  "readiness": "Ready",
+  "sessions": [
+    {
+      "session_id": "s1",
+      "lifecycle": "READY",
+      "connectivity": "online"
+    }
+  ]
+}

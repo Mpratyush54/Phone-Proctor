@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "type": "policy",
+  "policy_id": "p1",
+  "version": 1,
+  "immutable": false,
+  "capabilities": {
+    "camera": true
+  }
+}

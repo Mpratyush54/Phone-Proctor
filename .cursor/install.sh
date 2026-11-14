@@ -23,4 +23,12 @@ python -m pip install -r requirements.txt
 # Test runner (used by pytest.ini / the tests/ suite).
 python -m pip install pytest
 
+# Control-plane Node packages (API / gateway / worker + admin console).
+if command -v npm >/dev/null 2>&1; then
+  (cd server && npm install)
+  (cd admin && npm install)
+else
+  echo "[install] warning: npm not found; skipped server/admin Node installs" >&2
+fi
+
 echo "[install] Phone-Proctor environment ready. Activate with: source $VENV/bin/activate"
