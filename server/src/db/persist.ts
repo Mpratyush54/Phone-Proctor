@@ -181,6 +181,16 @@ export async function upsertEvent(row: {
        ON CONFLICT DO NOTHING`,
       [row.orgId, row.sessionId, row.seq, row.batchId, row.hash, JSON.stringify(row.payload ?? {})],
     );
+    await c.query(
+      `INSERT INTO ingest_cursor (session_id, acked_through)
+       VALUES ($1, $2)
+       ON CONFLICT (session_id) DO UPDATE SET acked_through = GREATEST(ingest_cursor.acked_through, EXCLUDED.acked_through)`,
+      [row.sessionId, row.seq],
+    );
+    await c.query(
+      `INSERT INTO outbox (topic, payload) VALUES ('event.ingested', $1::jsonb)`,
+      [JSON.stringify({ session_id: row.sessionId, seq: row.seq })],
+    );
   });
 }
 

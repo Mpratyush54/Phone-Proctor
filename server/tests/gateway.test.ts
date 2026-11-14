@@ -65,3 +65,41 @@ test("unknown major nacks", async () => {
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
+
+test("connection takeover closes previous socket; pending command is delivered", async () => {
+  const store = new Store();
+  const seeded = store.seedDev();
+  const ctx = store.lookupStaff(store.createStaffSession(seeded.orgId, seeded.userId).raw)!;
+  const exam = store.createExam(ctx, "T", "t", {});
+  store.importRoster(ctx, exam.id, [{ student_external_id: "1", display_name: "A" }]);
+  const en = [...store.enrollments.values()][0];
+  const cred = store.redeemEnrollment(store.issueToken(ctx, en.id).token, "fp");
+  store.acceptCommand(ctx, cred.session_id, "WARN", "k1", {});
+  const server = startGateway(store, { listen: false });
+  const url = await waitListening(server);
+  try {
+    async function connect() {
+      const ws = new WebSocket(url);
+      await new Promise((r) => ws.once("open", r));
+      const recv = () => new Promise<Record<string, unknown>>((resolve) => ws.once("message", (d) => resolve(JSON.parse(String(d)))));
+      ws.send(JSON.stringify({ v: 1, type: "hello", payload: {} }));
+      await recv();
+      ws.send(JSON.stringify({ v: 1, type: "resume", payload: { device_credential_id: cred.device_credential_id, session_id: cred.session_id } }));
+      await recv();
+      return { ws };
+    }
+    const a = await connect();
+    const closed = new Promise<number>((resolve) => a.ws.once("close", (code) => resolve(code)));
+    const b = await connect();
+    assert.equal(await closed, 4409);
+    const cmd = await Promise.race([
+      new Promise<Record<string, unknown>>((resolve) => b.ws.once("message", (d) => resolve(JSON.parse(String(d))))),
+      new Promise<Record<string, unknown>>((resolve) => setTimeout(() => resolve({ type: "timeout" }), 800)),
+    ]);
+    assert.equal(cmd.type, "command");
+    b.ws.close();
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+

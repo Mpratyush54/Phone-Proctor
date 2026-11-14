@@ -16,7 +16,7 @@ const OPENAPI = {
     "/api/v1/auth/callback": { get: { summary: "OIDC callback" } },
     "/api/v1/auth/logout": { post: { summary: "Logout" } },
     "/api/v1/auth/step-up": { post: { summary: "OIDC step-up proof" } },
-    "/api/v1/me": { get: { summary: "Current staff" } },
+    "/api/v1/permissions": { get: { summary: "Staff permissions" } },
     "/api/v1/exams": { get: { summary: "List exams" }, post: { summary: "Create exam" } },
     "/api/v1/exams/{id}/open": { post: { summary: "Open exam" } },
     "/api/v1/exams/{id}/policy": { patch: { summary: "Update policy" } },
@@ -168,6 +168,11 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     res.json({ user_id: ctx.userId, org_id: ctx.orgId, roles: ctx.roles, permissions: [...ctx.permissions], csrf: ctx.csrf });
   });
 
+  app.get("/api/v1/permissions", (req, res) => {
+    const ctx = staffFrom(req);
+    res.json({ permissions: [...ctx.permissions], roles: ctx.roles });
+  });
+
   app.post("/api/v1/exams", (req, res) => {
     const ctx = staffFrom(req);
     const exam = store.createExam(ctx, req.body.code, req.body.title, req.body.policy || { camera: true });
@@ -180,6 +185,15 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     const cursor = Number(req.query.cursor || 0);
     const items = [...store.exams.values()].filter((e) => e.orgId === ctx.orgId).slice(cursor, cursor + 50);
     res.json({ items, next_cursor: cursor + items.length });
+  });
+
+  app.get("/api/v1/exams/:id", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "exam.read");
+    const exam = store.exams.get(req.params.id);
+    if (!exam) throw new ApiError("NOT_FOUND", "exam", 404);
+    store.assertOrg(ctx, exam.orgId);
+    res.json(exam);
   });
 
   app.post("/api/v1/exams/:id/open", (req, res) => {
@@ -223,10 +237,46 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     res.json({ exam_id: req.params.id, readiness: store.readiness(req.params.id), causes: [] });
   });
 
+  app.get("/api/v1/exams/:id/sessions", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "session.read");
+    const cursor = Number(req.query.cursor || 0);
+    const limit = Math.min(Number(req.query.limit || 200), 500);
+    const snap = store.snapshot(req.params.id, { cursor, limit });
+    res.json({ items: snap.sessions, next_cursor: snap.next_cursor, total: snap.total });
+  });
+
+  app.get("/api/v1/sessions/:id/events", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "session.read");
+    const s = store.sessions.get(req.params.id);
+    if (!s) throw new ApiError("NOT_FOUND", "session", 404);
+    store.assertOrg(ctx, s.orgId);
+    const cursor = Number(req.query.cursor || 0);
+    const items = store.events.filter((e) => e.sessionId === s.id).slice(cursor, cursor + 100);
+    res.json({ items, next_cursor: cursor + items.length });
+  });
+
+  app.get("/api/v1/commands/:id", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "session.read");
+    const cmd = store.commands.get(req.params.id);
+    if (!cmd) throw new ApiError("NOT_FOUND", "command", 404);
+    res.json(cmd);
+  });
+
+  app.post("/api/v1/exams/:id/commands", (req, res) => {
+    const ids = Array.isArray(req.body.session_ids) ? req.body.session_ids : [];
+    res.json(store.bulkCommands(staffFrom(req), ids, req.body.type, req.body.idempotency_key || randomUUID()));
+  });
+
   app.get("/api/v1/console/snapshot", (req, res) => {
     const ctx = staffFrom(req);
     store.require(ctx, "session.read");
-    res.json(store.snapshot(String(req.query.exam_id)));
+    res.json(store.snapshot(String(req.query.exam_id), {
+      cursor: Number(req.query.cursor || 0),
+      limit: Number(req.query.limit || 200),
+    }));
   });
 
   app.get("/api/v1/console/deltas", (req, res) => {
@@ -273,6 +323,10 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   });
 
   app.post("/api/v1/sessions/:id/livekit", (req, res) => {
+    res.json(store.livekitToken(staffFrom(req), req.params.id, req.body.role || "subscribe"));
+  });
+
+  app.post("/api/v1/sessions/:id/live-token", (req, res) => {
     res.json(store.livekitToken(staffFrom(req), req.params.id, req.body.role || "subscribe"));
   });
 
@@ -333,10 +387,36 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     res.json(store.pollHealth());
   });
 
+  app.get("/api/v1/health/exams/:id", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "exam.read");
+    res.json({ exam_id: req.params.id, readiness: store.readiness(req.params.id), checks: store.pollHealth() });
+  });
+
+  app.get("/api/v1/platform/health", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "platform.ops");
+    res.json(store.platformView());
+  });
+
   app.get("/api/v1/platform/view", (req, res) => {
     const ctx = staffFrom(req);
     store.require(ctx, "platform.ops");
     res.json(store.platformView());
+  });
+
+  app.post("/api/v1/dev/ingest", (req, res) => {
+    if (cfg.production) throw new ApiError("NOT_FOUND", "not found", 404);
+    staffFrom(req);
+    res.json(
+      store.ingestEvent(
+        req.body.session_id,
+        Number(req.body.seq),
+        req.body.batch_id || randomUUID(),
+        req.body.hash || "a".repeat(64),
+        req.body.payload || {},
+      ),
+    );
   });
 
   app.get("/metrics", (_req, res) => {
@@ -351,6 +431,9 @@ export function createApp(cfg: AppConfig, store: Store): Express {
         "# HELP phoneproctor_auth_denials_total Auth denials",
         "# TYPE phoneproctor_auth_denials_total counter",
         `phoneproctor_auth_denials_total ${store.audit.filter((a) => a.action.startsWith("deny")).length}`,
+        "# HELP phoneproctor_exam_stream_rows Durable console stream rows",
+        "# TYPE phoneproctor_exam_stream_rows gauge",
+        `phoneproctor_exam_stream_rows ${store.examStream.length}`,
       ].join("\n"),
     );
   });
