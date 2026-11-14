@@ -2,6 +2,7 @@
 venv/Lib/site-packages
 venv/Scripts
 venv/
+.venv/
 */__pycache__
 *.pyc
 .DS_Store
