@@ -1,6 +1,6 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cookieParser from "cookie-parser";
-import { randomBytes, createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApiError, Store, type StaffContext } from "./store.js";
@@ -65,6 +65,18 @@ declare global {
   }
 }
 
+function integerParam(value: unknown, fallback: number, minimum = 0) {
+  if (value === undefined) return fallback;
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    throw new ApiError("VALIDATION", "expected an integer query parameter", 400);
+  }
+  const result = Number(value);
+  if (!Number.isSafeInteger(result) || result < minimum) {
+    throw new ApiError("VALIDATION", "integer query parameter out of range", 400);
+  }
+  return result;
+}
+
 export function createApp(cfg: AppConfig, store: Store): Express {
   const log = createLogger("api", cfg.LOG_LEVEL);
   const app = express();
@@ -116,34 +128,13 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   app.get("/health/ready", (_req, res) => res.json({ status: "ready", service: "api", checks: store.health() }));
   app.get("/api/v1/openapi.json", (_req, res) => res.json(OPENAPI));
 
-  app.get("/api/v1/auth/login", (req, res) => {
-    const state = randomBytes(16).toString("hex");
-    const nonce = randomBytes(16).toString("hex");
-    const verifier = randomBytes(32).toString("hex");
-    store.startOidc(state, nonce, verifier);
-    res.cookie("pp_oidc", JSON.stringify({ state, nonce, verifier }), { httpOnly: true, sameSite: "lax", secure: cfg.production });
-    const url = `${cfg.OIDC_ISSUER}/auth?client_id=${cfg.OIDC_CLIENT_ID}&redirect_uri=${encodeURIComponent(cfg.OIDC_REDIRECT_URL)}&state=${state}&nonce=${nonce}&code_challenge=dev&code_challenge_method=S256&response_type=code&scope=openid%20email`;
-    res.json({ url, state });
-  });
-
-  app.get("/api/v1/auth/callback", (req, res) => {
-    const cookie = req.cookies?.pp_oidc;
-    const parsed = cookie ? JSON.parse(cookie) : {};
-    const state = String(req.query.state || parsed.state);
-    const nonce = String(req.query.nonce || parsed.nonce);
-    const verifier = String(parsed.verifier || "dev-verifier");
-    store.consumeOidc(state, nonce, verifier);
-    const { orgId, userId } = [...store.memberships.values()][0] || store.seedDev();
-    const sess = store.createStaffSession(orgId, userId);
-    res.cookie("pp_session", sess.raw, { httpOnly: true, sameSite: "lax", secure: cfg.production });
-    res.json({ ok: true, csrf: sess.csrf, org_id: orgId });
+  app.get(["/api/v1/auth/login", "/api/v1/auth/callback"], () => {
+    throw new ApiError("UNAVAILABLE", "Staff identity provider verification is not configured", 503);
   });
 
   app.post("/api/v1/auth/dev-login", (req, res) => {
     if (cfg.production) throw new ApiError("AUTH_DENIED", "dev login disabled", 401);
-    const seeded = [...store.memberships.values()][0] || store.seedDev();
-    const orgId = "orgId" in seeded ? seeded.orgId : seeded.orgId;
-    const userId = "userId" in seeded ? seeded.userId : seeded.userId;
+    const { orgId, userId } = store.seedDev();
     const sess = store.createStaffSession(orgId, userId);
     res.cookie("pp_session", sess.raw, { httpOnly: true, sameSite: "lax", secure: false });
     res.json({ ok: true, csrf: sess.csrf, org_id: orgId });
@@ -151,15 +142,18 @@ export function createApp(cfg: AppConfig, store: Store): Express {
 
   app.post("/api/v1/auth/logout", (req, res) => {
     const raw = req.cookies?.pp_session;
-    if (raw) store.logout(raw);
+    if (raw && store.lookupStaff(raw)) {
+      staffFrom(req);
+      store.logout(raw);
+    }
     res.clearCookie("pp_session");
     res.json({ ok: true });
   });
 
   app.post("/api/v1/auth/step-up", (req, res) => {
-    const raw = req.cookies?.pp_session;
-    if (!raw) throw new ApiError("AUTH_DENIED", "no session", 401);
-    store.markStepUp(raw);
+    if (cfg.production) throw new ApiError("UNAVAILABLE", "Verified step-up is not configured", 503);
+    staffFrom(req);
+    store.markStepUp(req.rawSession!);
     res.json({ ok: true, acr: "step-up" });
   });
 
@@ -175,7 +169,7 @@ export function createApp(cfg: AppConfig, store: Store): Express {
 
   app.post("/api/v1/exams", (req, res) => {
     const ctx = staffFrom(req);
-    const exam = store.createExam(ctx, req.body.code, req.body.title, req.body.policy || { camera: true });
+    const exam = store.createExam(ctx, req.body?.code, req.body?.title, req.body?.policy ?? { camera: true });
     res.status(201).json(exam);
   });
 
@@ -183,17 +177,23 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     const ctx = staffFrom(req);
     store.require(ctx, "exam.read");
     const cursor = Number(req.query.cursor || 0);
-    const items = [...store.exams.values()].filter((e) => e.orgId === ctx.orgId).slice(cursor, cursor + 50);
-    res.json({ items, next_cursor: cursor + items.length });
+    if (!Number.isSafeInteger(cursor) || cursor < 0) throw new ApiError("VALIDATION", "Invalid cursor");
+    const query = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
+    const status = typeof req.query.status === "string" ? req.query.status.trim().toUpperCase() : "";
+    const exams = [...store.exams.values()].filter((e) =>
+      e.orgId === ctx.orgId && (!status || status === e.status) &&
+      (!query || e.code.toLowerCase().includes(query) || e.title.toLowerCase().includes(query))
+    );
+    const items = exams.slice(cursor, cursor + 50);
+    res.json({ items, next_cursor: cursor + items.length, total: exams.length });
   });
 
   app.get("/api/v1/exams/:id", (req, res) => {
-    const ctx = staffFrom(req);
-    store.require(ctx, "exam.read");
-    const exam = store.exams.get(req.params.id);
-    if (!exam) throw new ApiError("NOT_FOUND", "exam", 404);
-    store.assertOrg(ctx, exam.orgId);
-    res.json(exam);
+    res.json(store.examDetails(staffFrom(req), req.params.id));
+  });
+
+  app.patch("/api/v1/exams/:id/exam-link", (req, res) => {
+    res.json(store.saveExamLink(staffFrom(req), req.params.id, req.body?.url));
   });
 
   app.post("/api/v1/exams/:id/open", (req, res) => {
@@ -204,8 +204,22 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     res.json(store.updatePolicy(staffFrom(req), req.params.id, req.body));
   });
 
+  app.get("/api/v1/exams/:id/roster", (req, res) => {
+    const ctx = staffFrom(req);
+    const exam = store.exams.get(req.params.id);
+    if (!exam) throw new ApiError("NOT_FOUND", "exam", 404);
+    store.require(ctx, "roster.import", exam.id);
+    store.assertOrg(ctx, exam.orgId);
+    const cursor = Number(req.query.cursor || 0);
+    if (!Number.isSafeInteger(cursor) || cursor < 0) throw new ApiError("VALIDATION", "Invalid cursor");
+    const roster = [...store.enrollments.values()].filter((en) => en.examId === exam.id);
+    const items = roster.slice(cursor, cursor + 100).map(({ id, studentExternalId, displayName }) => ({ id, studentExternalId, displayName }));
+    res.json({ items, next_cursor: cursor + items.length, total: roster.length });
+  });
+
   app.post("/api/v1/exams/:id/roster", (req, res) => {
-    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    const rows = req.body?.rows;
+    if (!Array.isArray(rows) || !rows.length) throw new ApiError("VALIDATION", "At least one roster row is required");
     res.json({ results: store.importRoster(staffFrom(req), req.params.id, rows) });
   });
 
@@ -214,9 +228,8 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   });
 
   app.post("/api/v1/enroll", (req, res) => {
-    const key = req.headers["idempotency-key"];
-    res.json(store.redeemEnrollment(req.body.token, req.body.fingerprint || "fp", req.body.kind || "laptop"));
-    void key;
+    const body = req.body ?? {};
+    res.json(store.redeemEnrollment(body.token, body.fingerprint || "fp", body.kind || "laptop", body.client === "desktop"));
   });
 
   app.post("/api/v1/sessions/:id/pairing-token", (req, res) => {
@@ -232,16 +245,14 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   });
 
   app.get("/api/v1/exams/:id/readiness", (req, res) => {
-    const ctx = staffFrom(req);
-    store.require(ctx, "exam.read");
+    store.requireExam(staffFrom(req), req.params.id);
     res.json({ exam_id: req.params.id, readiness: store.readiness(req.params.id), causes: [] });
   });
 
   app.get("/api/v1/exams/:id/sessions", (req, res) => {
-    const ctx = staffFrom(req);
-    store.require(ctx, "session.read");
-    const cursor = Number(req.query.cursor || 0);
-    const limit = Math.min(Number(req.query.limit || 200), 500);
+    store.requireExam(staffFrom(req), req.params.id, "session.read");
+    const cursor = integerParam(req.query.cursor, 0);
+    const limit = integerParam(req.query.limit, 200, 1);
     const snap = store.snapshot(req.params.id, { cursor, limit });
     res.json({ items: snap.sessions, next_cursor: snap.next_cursor, total: snap.total });
   });
@@ -262,27 +273,34 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     store.require(ctx, "session.read");
     const cmd = store.commands.get(req.params.id);
     if (!cmd) throw new ApiError("NOT_FOUND", "command", 404);
+    store.assertOrg(ctx, cmd.orgId);
     res.json(cmd);
   });
 
   app.post("/api/v1/exams/:id/commands", (req, res) => {
-    const ids = Array.isArray(req.body.session_ids) ? req.body.session_ids : [];
-    res.json(store.bulkCommands(staffFrom(req), ids, req.body.type, req.body.idempotency_key || randomUUID()));
+    const ctx = staffFrom(req);
+    store.requireExam(ctx, req.params.id, "session.read");
+    const ids = req.body?.session_ids;
+    if (!Array.isArray(ids) || !ids.length || ids.some((id) => typeof id !== "string")) {
+      throw new ApiError("VALIDATION", "At least one session ID is required");
+    }
+    res.json(store.bulkCommands(ctx, ids, req.body.type, req.body.idempotency_key || randomUUID(), req.params.id));
   });
 
   app.get("/api/v1/console/snapshot", (req, res) => {
-    const ctx = staffFrom(req);
-    store.require(ctx, "session.read");
-    res.json(store.snapshot(String(req.query.exam_id), {
-      cursor: Number(req.query.cursor || 0),
-      limit: Number(req.query.limit || 200),
+    const examId = String(req.query.exam_id || "");
+    store.requireExam(staffFrom(req), examId, "session.read");
+    res.json(store.snapshot(examId, {
+      cursor: integerParam(req.query.cursor, 0),
+      limit: integerParam(req.query.limit, 200, 1),
     }));
   });
 
   app.get("/api/v1/console/deltas", (req, res) => {
-    const ctx = staffFrom(req);
-    store.require(ctx, "session.read");
-    res.json({ items: store.deltas(String(req.query.exam_id), Number(req.query.after_seq || 0)) });
+    const examId = String(req.query.exam_id || "");
+    store.requireExam(staffFrom(req), examId, "session.read");
+    const streamId = req.query.stream_id === undefined ? undefined : String(req.query.stream_id);
+    res.json(store.consoleUpdates(examId, integerParam(req.query.after_seq, 0), streamId));
   });
 
   app.post("/api/v1/sessions/:id/commands", (req, res) => {
@@ -305,9 +323,9 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     const s = store.sessions.get(req.params.id);
     if (!s) throw new ApiError("NOT_FOUND", "session", 404);
     store.assertOrg(ctx, s.orgId);
-    const cmds = [...store.commands.values()].filter((c) => c.sessionId === s.id);
+    const cmds = [...store.commands.values()].filter((c) => c.sessionId === s.id).slice(-50);
     const events = store.events.filter((e) => e.sessionId === s.id).slice(-50);
-    res.json({ session: s, commands: cmds, events, health: { connectivity: s.connectivity, attention: s.attention } });
+    res.json({ session: { ...s, display_name: store.enrollments.get(s.enrollmentId)?.displayName }, commands: cmds, events, health: { connectivity: s.connectivity, attention: s.attention } });
   });
 
   app.post("/api/v1/sessions/:id/media/uploads", (req, res) => {
@@ -330,17 +348,45 @@ export function createApp(cfg: AppConfig, store: Store): Express {
     res.json(store.livekitToken(staffFrom(req), req.params.id, req.body.role || "subscribe"));
   });
 
+  app.get("/api/v1/review/queue", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "review.annotate");
+    const cursor = Number(req.query.cursor || 0);
+    if (!Number.isSafeInteger(cursor) || cursor < 0) throw new ApiError("VALIDATION", "Invalid cursor");
+    const findings = [...store.findings.values()].filter((finding) => finding.orgId === ctx.orgId);
+    const items = findings.slice(cursor, cursor + 50).map(({ id, label, status, eventSeq }) => ({ id, label, status, event_seq: eventSeq }));
+    res.json({ items, next_cursor: cursor + items.length, total: findings.length });
+  });
+
   app.post("/api/v1/sessions/:id/findings", (req, res) => {
     res.json(store.addFinding(staffFrom(req), req.params.id, req.body.label, req.body.event_seq));
   });
 
   app.post("/api/v1/findings/:id/reviewers", (req, res) => {
+    const ctx = staffFrom(req);
+    store.require(ctx, "review.annotate");
+    const finding = store.findings.get(req.params.id);
+    if (!finding) throw new ApiError("NOT_FOUND", "finding", 404);
+    store.assertOrg(ctx, finding.orgId);
     store.assignReviewers(req.params.id, req.body.a, req.body.b);
     res.json({ ok: true });
   });
 
   app.post("/api/v1/findings/:id/appeal", (req, res) => {
-    res.json(store.appeal(req.params.id, req.body.original_reviewer_id, req.body.appeal_reviewer_id));
+    const ctx = staffFrom(req);
+    store.require(ctx, "appeal.decide");
+    const finding = store.findings.get(req.params.id);
+    if (!finding) throw new ApiError("NOT_FOUND", "finding", 404);
+    store.assertOrg(ctx, finding.orgId);
+    const reviewer = req.body?.appeal_reviewer_id;
+    if (!finding.actorId) throw new ApiError("CONFLICT", "Original reviewer is unavailable", 409);
+    if (typeof reviewer !== "string" || !reviewer.trim() || reviewer === finding.actorId) {
+      throw new ApiError("VALIDATION", "Choose a staff member other than the original reviewer");
+    }
+    if (![...store.memberships.values()].some((member) => member.orgId === ctx.orgId && member.userId === reviewer)) {
+      throw new ApiError("VALIDATION", "Appeal reviewer must belong to this workspace");
+    }
+    res.json(store.appeal(req.params.id, finding.actorId, reviewer));
   });
 
   app.put("/api/v1/models/:alias", (req, res) => {
@@ -355,13 +401,21 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   });
 
   app.post("/api/v1/exams/:id/commands/bulk", (req, res) => {
-    const ids = Array.isArray(req.body.session_ids) ? req.body.session_ids : [];
-    res.json(store.bulkCommands(staffFrom(req), ids, req.body.type, req.body.idempotency_key || randomUUID()));
+    const ctx = staffFrom(req);
+    store.requireExam(ctx, req.params.id, "session.read");
+    const ids = req.body?.session_ids;
+    if (!Array.isArray(ids) || !ids.length || ids.some((id) => typeof id !== "string")) {
+      throw new ApiError("VALIDATION", "At least one session ID is required");
+    }
+    res.json(store.bulkCommands(ctx, ids, req.body.type, req.body.idempotency_key || randomUUID(), req.params.id));
   });
 
   app.post("/api/v1/sessions/:id/legal-hold", (req, res) => {
     const ctx = staffFrom(req);
     store.require(ctx, "exam.end");
+    const session = store.sessions.get(req.params.id);
+    if (!session) throw new ApiError("NOT_FOUND", "session", 404);
+    store.assertOrg(ctx, session.orgId);
     store.freezeLegalHold(req.params.id);
     res.json({ ok: true, hold: true });
   });
@@ -388,8 +442,7 @@ export function createApp(cfg: AppConfig, store: Store): Express {
   });
 
   app.get("/api/v1/health/exams/:id", (req, res) => {
-    const ctx = staffFrom(req);
-    store.require(ctx, "exam.read");
+    store.requireExam(staffFrom(req), req.params.id);
     res.json({ exam_id: req.params.id, readiness: store.readiness(req.params.id), checks: store.pollHealth() });
   });
 
@@ -407,7 +460,11 @@ export function createApp(cfg: AppConfig, store: Store): Express {
 
   app.post("/api/v1/dev/ingest", (req, res) => {
     if (cfg.production) throw new ApiError("NOT_FOUND", "not found", 404);
-    staffFrom(req);
+    const ctx = staffFrom(req);
+    store.require(ctx, "session.command");
+    const session = store.sessions.get(req.body?.session_id);
+    if (!session) throw new ApiError("NOT_FOUND", "session", 404);
+    store.assertOrg(ctx, session.orgId);
     res.json(
       store.ingestEvent(
         req.body.session_id,
@@ -424,22 +481,25 @@ export function createApp(cfg: AppConfig, store: Store): Express {
       [
         "# HELP phoneproctor_events_ingested_total Events ingested",
         "# TYPE phoneproctor_events_ingested_total counter",
-        `phoneproctor_events_ingested_total ${store.events.length}`,
+        `phoneproctor_events_ingested_total ${store.ingestedEventCount}`,
         "# HELP phoneproctor_commands_total Commands accepted",
         "# TYPE phoneproctor_commands_total counter",
         `phoneproctor_commands_total ${store.commands.size}`,
         "# HELP phoneproctor_auth_denials_total Auth denials",
         "# TYPE phoneproctor_auth_denials_total counter",
         `phoneproctor_auth_denials_total ${store.audit.filter((a) => a.action.startsWith("deny")).length}`,
-        "# HELP phoneproctor_exam_stream_rows Durable console stream rows",
+        "# HELP phoneproctor_exam_stream_rows Retained console stream rows",
         "# TYPE phoneproctor_exam_stream_rows gauge",
-        `phoneproctor_exam_stream_rows ${store.examStream.length}`,
+        `phoneproctor_exam_stream_rows ${store.examStream.size}`,
       ].join("\n"),
     );
   });
 
   const adminDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
   app.use(express.static(adminDir));
+  app.get(["/login", "/exams", "/exams/:id", "/exams/:id/setup", "/sessions/:id", "/review", "/appeals", "/platform"], (_req, res) => {
+    res.sendFile(path.join(adminDir, "index.html"));
+  });
 
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof ApiError) {

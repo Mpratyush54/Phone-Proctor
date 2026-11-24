@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import Ajv from "ajv/dist/2020.js";
-import addFormats from "ajv-formats";
+import { Ajv2020 } from "ajv/dist/2020.js";
+import addFormats, { type FormatsPlugin } from "ajv-formats";
 
 const contractsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../contracts/v1");
 
 export function loadAjv() {
-  const ajv = new Ajv({ allErrors: true, strict: false, allowUnionTypes: true });
-  addFormats(ajv);
+  const ajv = new Ajv2020({ allErrors: true, strict: false, allowUnionTypes: true });
+  (addFormats as unknown as FormatsPlugin)(ajv);
   const schemaDir = path.join(contractsRoot, "schemas");
   for (const file of fs.readdirSync(schemaDir)) {
     if (!file.endsWith(".schema.json")) continue;

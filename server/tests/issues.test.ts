@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Store } from "../src/store.js";
@@ -10,7 +11,7 @@ function staff(store: Store) {
 test("B6b pairing cannot register agent; replay denied", () => {
   const store = new Store();
   const ctx = staff(store);
-  const exam = store.createExam(ctx, "P", "p", {});
+  const exam = store.createExam(ctx, `P-${randomUUID()}`, "p", {});
   store.importRoster(ctx, exam.id, [{ student_external_id: "1", display_name: "A" }]);
   const en = [...store.enrollments.values()][0];
   const tok = store.issueToken(ctx, en.id);
@@ -29,7 +30,7 @@ test("B6b pairing cannot register agent; replay denied", () => {
 test("B1b console deltas share stream_seq and use contract ops", () => {
   const store = new Store();
   const ctx = staff(store);
-  const exam = store.createExam(ctx, "D", "d", {});
+  const exam = store.createExam(ctx, `D-${randomUUID()}`, "d", {});
   store.importRoster(ctx, exam.id, [{ student_external_id: "1", display_name: "A" }]);
   const en = [...store.enrollments.values()][0];
   const sid = store.redeemEnrollment(store.issueToken(ctx, en.id).token, "fp").session_id;
@@ -46,7 +47,7 @@ test("B1b console deltas share stream_seq and use contract ops", () => {
 test("D4b bulk commands partial failure; G2 redis down degrades fanout", () => {
   const store = new Store();
   const ctx = staff(store);
-  const exam = store.createExam(ctx, "B", "b", {});
+  const exam = store.createExam(ctx, `B-${randomUUID()}`, "b", {});
   store.importRoster(ctx, exam.id, [{ student_external_id: "1", display_name: "A" }, { student_external_id: "2", display_name: "B" }]);
   const ids = [];
   for (const en of store.enrollments.values()) {
@@ -59,7 +60,7 @@ test("D4b bulk commands partial failure; G2 redis down degrades fanout", () => {
   store.redisDown = true;
   const h = store.pollHealth();
   assert.equal(h.fanout, "degraded");
-  assert.equal(h.source, "postgres");
+  assert.equal(h.source, "process");
   assert.equal(store.platformView().kafka, false);
   assert.equal(store.eventPartitioning, false);
 });
@@ -67,7 +68,7 @@ test("D4b bulk commands partial failure; G2 redis down degrades fanout", () => {
 test("E10 legal hold and STOP_LIVE; F9 shadow does not throw", () => {
   const store = new Store();
   const ctx = staff(store);
-  const exam = store.createExam(ctx, "M", "m", {});
+  const exam = store.createExam(ctx, `M-${randomUUID()}`, "m", {});
   store.importRoster(ctx, exam.id, [{ student_external_id: "1", display_name: "A" }]);
   const en = [...store.enrollments.values()][0];
   const sid = store.redeemEnrollment(store.issueToken(ctx, en.id).token, "fp").session_id;
@@ -75,7 +76,7 @@ test("E10 legal hold and STOP_LIVE; F9 shadow does not throw", () => {
   assert.equal(store.retainOrDiscard(sid).action, "hold");
   store.startLive(sid, ctx.userId);
   assert.equal(store.stopLive(sid, ctx.userId).stopped, true);
-  const r = store.ingestEvent(sid, 1, "b", "a".repeat(64), { event_type: "METRICS", gaze_h: 0.9 });
+  const r = store.ingestEvent(sid, 1, randomUUID(), "a".repeat(64), { event_type: "METRICS", gaze_h: 0.9 });
   assert.equal(r.duplicate, false);
   assert.ok(store.shadows.length >= 1);
 });

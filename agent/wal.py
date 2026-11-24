@@ -102,6 +102,10 @@ class EventWal:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def acked_through(self) -> int:
+        with self._lock:
+            return int(self._conn.execute("SELECT v FROM wal_meta WHERE k='acked_through'").fetchone()[0])
+
     def ack_through(self, seq_no: int) -> int:
         """Cumulative contiguous ACK: only mark 1..N if every seq ≤ N is present."""
         with self._lock:

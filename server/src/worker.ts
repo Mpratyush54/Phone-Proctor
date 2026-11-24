@@ -23,6 +23,7 @@ export function startWorker(store = globalStore) {
 
   const timer = setInterval(() => {
     store.expireStaleCommands();
+    store.expireClaims();
     for (const m of store.media.values()) {
       if (m.status === "pending_verification") {
         m.attempts += 1;
@@ -41,6 +42,7 @@ export function startWorker(store = globalStore) {
   server.listen(cfg.WORKER_PORT, cfg.WORKER_HOST, () => {
     log.info({ host: cfg.WORKER_HOST, port: cfg.WORKER_PORT }, "worker listening");
   });
+  server.on("close", () => clearInterval(timer));
   return server;
 }
 

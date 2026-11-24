@@ -7,6 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "control-plane": "tsx src/control-plane.ts",
     "api": "tsx src/api.ts",
     "gateway": "tsx src/gateway.ts",
     "worker": "tsx src/worker.ts",

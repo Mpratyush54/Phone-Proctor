@@ -1,50 +1,53 @@
 import React from "react";
-import { api } from "../api/client";
+import { useMutation } from "@tanstack/react-query";
+import { Archive, Gavel, Shield } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { api, ApiError } from "../api/client";
+import { usePermissions } from "../auth";
+import { Feedback, PageHeading } from "../components/ui";
 
 export function Appeals() {
-  const [findingId, setFindingId] = React.useState("");
-  const [originalReviewerId, setOriginalReviewerId] = React.useState("");
+  const allowed = usePermissions();
+  const [params] = useSearchParams();
+  const [findingId, setFindingId] = React.useState(params.get("finding") ?? "");
   const [appealReviewerId, setAppealReviewerId] = React.useState("");
   const [sessionId, setSessionId] = React.useState("");
-  const [out, setOut] = React.useState("");
-  return (
-    <main>
-      <h1>Appeals</h1>
-      <p>Evidence freeze and independent appeal. Appeal reviewer cannot be the original decision maker.</p>
-      <h2>Freeze evidence</h2>
-      <input placeholder="session id" value={sessionId} onChange={(e) => setSessionId(e.target.value)} />
-      <button
-        onClick={async () => {
-          try {
-            const r = await api(`/api/v1/sessions/${sessionId}/legal-hold`, { method: "POST", body: "{}" });
-            setOut(JSON.stringify(r, null, 2));
-          } catch (e) {
-            setOut(JSON.stringify(e));
-          }
-        }}
-      >
-        Freeze
-      </button>
-      <h2>Appeal finding</h2>
-      <input placeholder="finding id" value={findingId} onChange={(e) => setFindingId(e.target.value)} />
-      <input placeholder="original reviewer id" value={originalReviewerId} onChange={(e) => setOriginalReviewerId(e.target.value)} />
-      <input placeholder="appeal reviewer id" value={appealReviewerId} onChange={(e) => setAppealReviewerId(e.target.value)} />
-      <button
-        onClick={async () => {
-          try {
-            const r = await api(`/api/v1/findings/${findingId}/appeal`, {
-              method: "POST",
-              body: JSON.stringify({ original_reviewer_id: originalReviewerId, appeal_reviewer_id: appealReviewerId }),
-            });
-            setOut(JSON.stringify(r, null, 2));
-          } catch (e) {
-            setOut(JSON.stringify(e));
-          }
-        }}
-      >
-        Submit appeal
-      </button>
-      <pre>{out}</pre>
-    </main>
-  );
+  const freeze = useMutation({
+    mutationFn: () => api(`/api/v1/sessions/${encodeURIComponent(sessionId.trim())}/legal-hold`, { method: "POST", body: "{}" }),
+  });
+  const stepUp = useMutation({
+    mutationFn: () => api("/api/v1/auth/step-up", { method: "POST", body: "{}" }),
+    onSuccess: () => freeze.reset(),
+  });
+  const appeal = useMutation({
+    mutationFn: () => api<{ id: string }>(`/api/v1/findings/${encodeURIComponent(findingId.trim())}/appeal`, {
+      method: "POST", body: JSON.stringify({ appeal_reviewer_id: appealReviewerId.trim() }),
+    }),
+  });
+  const needsVerification = freeze.error instanceof ApiError && freeze.error.code === "STEP_UP_REQUIRED";
+  return <main>
+    <PageHeading title="Appeals" description="Protect session evidence and assign an independent appeal reviewer." />
+    {allowed("exam.end") && <section className="panel padded">
+      <h2 className="heading-icon"><Archive size={19} /> Freeze session evidence</h2>
+      <form onSubmit={(event) => { event.preventDefault(); if (sessionId.trim() && !freeze.isPending && !stepUp.isPending) freeze.mutate(); }}>
+        <label>Session ID<input required disabled={freeze.isPending} value={sessionId} onChange={(event) => { setSessionId(event.target.value); freeze.reset(); }} /></label>
+        <button disabled={freeze.isPending || stepUp.isPending || !sessionId.trim()}>{freeze.isPending ? "Freezing…" : "Freeze evidence"}</button>
+      </form>
+      <Feedback error={freeze.error} message={freeze.isSuccess ? "Evidence hold applied." : undefined} />
+      {needsVerification && <button onClick={() => stepUp.mutate()} disabled={stepUp.isPending}><Shield size={16} /> {stepUp.isPending ? "Confirming…" : "Confirm development session"}</button>}
+      <Feedback error={stepUp.error} message={stepUp.isSuccess ? "Staff session confirmed. You can place the hold now." : undefined} />
+    </section>}
+    <section className="panel padded">
+      <h2 className="heading-icon"><Gavel size={19} /> Submit an appeal</h2>
+      <p className="muted">Choose a staff member in this workspace. The server checks that they did not record the original finding.</p>
+      <form onSubmit={(event) => { event.preventDefault(); if (findingId.trim() && appealReviewerId.trim() && !appeal.isPending) appeal.mutate(); }}>
+        <div className="form-grid">
+          <label>Finding ID<input required disabled={appeal.isPending} value={findingId} onChange={(event) => { setFindingId(event.target.value); appeal.reset(); }} /></label>
+          <label>Appeal reviewer ID<input required disabled={appeal.isPending} value={appealReviewerId} onChange={(event) => { setAppealReviewerId(event.target.value); appeal.reset(); }} /></label>
+        </div>
+        <button className="primary" disabled={appeal.isPending || !findingId.trim() || !appealReviewerId.trim()}>{appeal.isPending ? "Submitting…" : "Submit appeal"}</button>
+      </form>
+      <Feedback error={appeal.error} message={appeal.data ? `Appeal submitted. Reference ${appeal.data.id}.` : undefined} />
+    </section>
+  </main>;
 }

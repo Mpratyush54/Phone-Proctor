@@ -4,24 +4,58 @@ Control-plane + laptop agent for multi-modal exam proctoring. GitHub issues #1â€
 
 ## Quick start
 
-Laptop agent (existing local mode):
+### Student desktop (staff-controlled)
+
+Install Python 3.12 and the Qt desktop dependencies. On Linux, run from a graphical session. Open the student desktop from the repository root:
+
+```bash
+python -m pip install "websockets>=14" opencv-python PyQt6 PyQt6-WebEngine
+python -m agent
+```
+
+Start the shared control plane and staff console first. In the console, create and open an exam, import the roster, and issue an enrollment token. The candidate pastes the token into the desktop and chooses whether to allow the webcam availability check. Start, pause, resume, warn, and end are available from the candidate session in Monitoring. The desktop shows the observed exam state and reports a command receipt back to staff. Set the HTTPS exam website in Exam setup before the first candidate enrolls. The website opens inside the student workspace after staff select Start. Pause hides the exam, Resume restores the same page, and End closes it. The exam provider still owns its login and submission flow.
+
+The default local API and gateway ports are 8080 and 8081. When Metro uses 8081, run `GATEWAY_PORT=8083 npm run control-plane` in `server` and launch the student app with `python -m agent --gateway ws://127.0.0.1:8083`. The desktop's Connection settings also allow staff-provided API and gateway addresses. Remote endpoints require HTTPS and WSS. For local development, the exam website can use HTTP on loopback.
+
+For a local test without webcam hardware, clear **Require a desktop camera check before starting** when creating the exam. The desktop reports connection, camera availability and exam activity. Webcam frames are discarded locally. The separate local app below handles legacy phone streaming.
+
+### Legacy local app
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-Control plane (API, gateway, worker, console). Postgres is required from the first vertical slice:
+Control plane (API, gateway, worker, console). Start the local PostgreSQL 16
+service first (for example, `docker compose -f infra/docker-compose.yml up -d --wait postgres`),
+then run the migrations and start the shared control plane:
 
 ```bash
-./dev.sh                          # Docker Postgres/MinIO/Dex, or local Postgres
 export DATABASE_URL=postgres://proctor:proctor@127.0.0.1:5432/proctor
-cd server && npm install && npm test && npm run api
-# other terminals:
-cd server && npm run gateway
-cd server && npm run worker
-cd admin && npm install && npm run dev
+cd server
+npm ci
+npm run migrate
+npm run control-plane
 ```
+
+In a separate terminal from the repository root, start the staff console:
+
+```bash
+cd admin
+npm ci
+npm run dev
+```
+
+Use the console address shown by Vite and the local development sign-in.
+Set `GATEWAY_PORT=8083` when React Native Metro uses the default gateway port
+8081. Pass the same gateway port to agent clients.
+
+The shared control-plane command starts the API, gateway, and worker in one
+process so they can share exam, agent, command, and staff session state.
+Postgres records persisted rows, but the current store does not reload all
+runtime state on restart or share it across separately started processes.
+The standalone `api`, `gateway`, and `worker` commands are for isolated
+development and troubleshooting.
 
 The first demonstrable milestone is one authenticated controller starting one
 authenticated agent, receiving one durably acknowledged event, and ending the

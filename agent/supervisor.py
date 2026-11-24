@@ -129,7 +129,7 @@ class AgentSupervisor:
                 raise DuplicateCommand(self._command_results[key])
             seq = self.wal.append(
                 "COMMAND_RECEIPT",
-                {"command_id": command.get("command_id"), "type": command.get("type")},
+                {"event_type": "COMMAND_RECEIPT", "command_id": command.get("command_id"), "type": command.get("type")},
                 priority="high",
             )
             try:
@@ -191,6 +191,6 @@ class AgentSupervisor:
         self.observed_lifecycle_state = state
         self.wal.append(
             "LIFECYCLE",
-            self.persist_snapshot(),
+            {"event_type": "LIFECYCLE", **self.persist_snapshot()},
             priority="high",
         )

@@ -35,15 +35,17 @@ export async function ping(): Promise<PostgresHealth> {
   }
 }
 
-/** Fire-and-forget persist; no-op unless DATABASE_URL is set and a pool exists. */
-export function enqueuePersist(work: () => Promise<void>): void {
-  if (!process.env.DATABASE_URL) return;
-  if (!getPool()) return;
-  persistChain = persistChain
-    .then(work)
-    .catch((err: unknown) => {
+/** Serialize related writes and let callers await their own result when needed. */
+export function enqueuePersist<T>(work: () => Promise<T>): Promise<T | undefined> {
+  if (!getPool()) return Promise.resolve(undefined);
+  const result = persistChain.then(work);
+  persistChain = result.then(
+    () => undefined,
+    (err: unknown) => {
       log.warn({ err }, "postgres persist failed");
-    });
+    },
+  );
+  return result;
 }
 
 export function flushPersist(): Promise<void> {
@@ -173,24 +175,47 @@ export async function upsertEvent(row: {
   hash: string;
   payload: unknown;
   orgId: string;
-}): Promise<void> {
-  await withOrg(row.orgId, async (c) => {
-    await c.query(
+}): Promise<number | undefined> {
+  return withOrg(row.orgId, async (c) => {
+    const insert = await c.query(
       `INSERT INTO event (org_id, session_id, seq_no, batch_id, payload_hash, payload)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT (session_id, seq_no) DO NOTHING`,
       [row.orgId, row.sessionId, row.seq, row.batchId, row.hash, JSON.stringify(row.payload ?? {})],
     );
-    await c.query(
-      `INSERT INTO ingest_cursor (session_id, acked_through)
-       VALUES ($1, $2)
-       ON CONFLICT (session_id) DO UPDATE SET acked_through = GREATEST(ingest_cursor.acked_through, EXCLUDED.acked_through)`,
-      [row.sessionId, row.seq],
+    if (!insert.rowCount) {
+      const existing = await c.query<{ payload_hash: string }>(
+        "SELECT payload_hash FROM event WHERE session_id = $1 AND seq_no = $2",
+        [row.sessionId, row.seq],
+      );
+      if (existing.rows[0]?.payload_hash !== row.hash) {
+        throw Object.assign(new Error("same seq different hash"), { code: "HASH_MISMATCH" });
+      }
+    } else {
+      await c.query(
+        "INSERT INTO outbox (topic, payload) VALUES ('event.ingested', $1::jsonb)",
+        [JSON.stringify({ session_id: row.sessionId, seq: row.seq })],
+      );
+    }
+    await c.query("INSERT INTO ingest_cursor (session_id) VALUES ($1) ON CONFLICT DO NOTHING", [row.sessionId]);
+    const cursor = await c.query<{ acked_through: string }>(
+      "SELECT acked_through FROM ingest_cursor WHERE session_id = $1 FOR UPDATE",
+      [row.sessionId],
     );
-    await c.query(
-      `INSERT INTO outbox (topic, payload) VALUES ('event.ingested', $1::jsonb)`,
-      [JSON.stringify({ session_id: row.sessionId, seq: row.seq })],
+    const acked = Number(cursor.rows[0].acked_through);
+    if (row.seq !== acked + 1) return acked;
+    const next = await c.query<{ acked: string }>(
+      `WITH pending AS (
+         SELECT seq_no, row_number() OVER (ORDER BY seq_no) AS seq_rank
+         FROM event WHERE session_id = $1 AND seq_no > $2::bigint
+       )
+       SELECT COALESCE(MIN($2::bigint + seq_rank - 1) FILTER (WHERE seq_no <> $2::bigint + seq_rank), MAX(seq_no), $2::bigint) AS acked
+       FROM pending`,
+      [row.sessionId, acked],
     );
+    const through = Number(next.rows[0].acked);
+    await c.query("UPDATE ingest_cursor SET acked_through = $2 WHERE session_id = $1", [row.sessionId, through]);
+    return through;
   });
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { Store } from "../src/store.js";
@@ -36,17 +36,6 @@ function cookie(res: { headers: Headers }) {
   return raw.split(";")[0];
 }
 
-async function login(base: string, store: Store) {
-  const login = await req(base, "/api/v1/auth/login");
-  const body = login.json as { state: string };
-  const oidc = store.oidcTx.get(body.state)!;
-  const cb = await req(base, `/api/v1/auth/callback?state=${body.state}&nonce=${oidc.nonce}`, {
-    cookies: `pp_oidc=${encodeURIComponent(JSON.stringify({ state: body.state, nonce: oidc.nonce, verifier: "x" }))}`,
-  });
-  // consumeOidc checks pkce against hashed verifier stored at startOidc — login used random verifier
-  return cb;
-}
-
 test("production refuses missing config", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" } as NodeJS.ProcessEnv));
 });
@@ -56,15 +45,19 @@ test("dev defaults bind localhost", () => {
   assert.equal(cfg.API_HOST, "127.0.0.1");
 });
 
-test("staff oauth csrf rbac exam roster session command media finding", async () => {
+test("staff dev session, OIDC fails closed, CSRF, RBAC, exam, roster, commands and media", async () => {
   const store = new Store("pepper");
-  const seeded = store.seedDev();
   const cfg = loadConfig({ NODE_ENV: "test", ORIGIN_ALLOWLIST: "http://127.0.0.1" } as NodeJS.ProcessEnv);
   const { server, base } = await listen(createApp(cfg, store));
   try {
-    const sess = store.createStaffSession(seeded.orgId, seeded.userId);
-    const cookies = `pp_session=${sess.raw}`;
-    const h = { "x-csrf-token": sess.csrf, "content-type": "application/json" };
+    const oidc = await req(base, "/api/v1/auth/callback?state=unverified&code=unverified");
+    assert.equal(oidc.status, 503);
+    assert.equal(cookie(oidc), "");
+    const login = await req(base, "/api/v1/auth/dev-login", { method: "POST" });
+    assert.equal(login.status, 200);
+    const cookies = cookie(login);
+    const csrf = (login.json as { csrf: string }).csrf;
+    const h = { "x-csrf-token": csrf, "content-type": "application/json" };
 
     const denied = await req(base, "/api/v1/exams", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     assert.equal(denied.status, 401);
@@ -81,12 +74,17 @@ test("staff oauth csrf rbac exam roster session command media finding", async ()
       method: "POST",
       cookies,
       headers: h,
-      body: JSON.stringify({ code: "CS101", title: "Algo", policy: { camera: true } }),
+      body: JSON.stringify({ code: `CS101-${randomUUID()}`, title: "Algo", policy: { camera: true } }),
     });
     assert.equal(exam.status, 201);
     const examId = (exam.json as { id: string }).id;
 
-    store.openExam(store.lookupStaff(sess.raw)!, examId);
+    const firstOpen = await req(base, `/api/v1/exams/${examId}/open`, { method: "POST", cookies, headers: h });
+    assert.equal(firstOpen.status, 200);
+    const secondOpen = await req(base, `/api/v1/exams/${examId}/open`, { method: "POST", cookies, headers: h });
+    assert.equal((secondOpen.json as { version: number }).version, (firstOpen.json as { version: number }).version);
+    const search = await req(base, "/api/v1/exams?q=algo&status=open", { cookies });
+    assert.equal((search.json as { total: number }).total, 1);
     const pol = await req(base, `/api/v1/exams/${examId}/policy`, { method: "PATCH", cookies, headers: h, body: "{}" });
     assert.equal(pol.status, 409);
 
@@ -100,7 +98,11 @@ test("staff oauth csrf rbac exam roster session command media finding", async ()
     assert.equal(results[0].ok, true);
     assert.equal(results[1].ok, false);
 
-    const enId = [...store.enrollments.values()][0].id;
+    const rosterList = await req(base, `/api/v1/exams/${examId}/roster`, { cookies });
+    const listed = rosterList.json as { total: number; items: { id: string; displayName: string }[] };
+    assert.equal(listed.total, 1);
+    assert.equal(listed.items[0].displayName, "Ada");
+    const enId = listed.items[0].id;
     const tok = await req(base, `/api/v1/enrollments/${enId}/token`, { method: "POST", cookies, headers: h, body: "{}" });
     const token = (tok.json as { token: string }).token;
     const enroll = await req(base, "/api/v1/enroll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token, fingerprint: "fp" }) });
@@ -116,7 +118,8 @@ test("staff oauth csrf rbac exam roster session command media finding", async ()
       body: JSON.stringify({ type: "EXAM_END", idempotency_key: "e1" }),
     });
     assert.equal(startDenied.status, 403);
-    store.markStepUp(sess.raw);
+    const stepUp = await req(base, "/api/v1/auth/step-up", { method: "POST", cookies, headers: h });
+    assert.equal(stepUp.status, 200);
     const ended = await req(base, `/api/v1/sessions/${sessionId}/commands`, {
       method: "POST",
       cookies,
@@ -134,7 +137,7 @@ test("staff oauth csrf rbac exam roster session command media finding", async ()
 
     const payload = { event_type: "VIOLATION" };
     const hash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-    const r1 = store.ingestEvent(sessionId, 1, "b1", hash, payload);
+    const r1 = store.ingestEvent(sessionId, 1, randomUUID(), hash, payload);
     assert.equal(r1.acked_through, 1);
     const r2 = store.ingestEvent(sessionId, 1, "b1-dup-seq", hash, payload);
     assert.equal(r2.duplicate, true);
@@ -142,6 +145,17 @@ test("staff oauth csrf rbac exam roster session command media finding", async ()
 
     const snap = await req(base, `/api/v1/console/snapshot?exam_id=${examId}`, { cookies });
     assert.equal((snap.json as { exam_id: string }).exam_id, examId);
+
+    const noEvidence = await req(base, `/api/v1/sessions/${sessionId}/findings`, {
+      method: "POST", cookies, headers: h, body: JSON.stringify({ label: "Review", event_seq: 2 }),
+    });
+    assert.equal(noEvidence.status, 404);
+    const finding = await req(base, `/api/v1/sessions/${sessionId}/findings`, {
+      method: "POST", cookies, headers: h, body: JSON.stringify({ label: "Review", event_seq: 1 }),
+    });
+    assert.equal((finding.json as { eventSeq: number }).eventSeq, 1);
+    const queue = await req(base, "/api/v1/review/queue", { cookies });
+    assert.deepEqual((queue.json as { items: unknown[] }).items, [{ id: (finding.json as { id: string }).id, label: "Review", status: "provisional", event_seq: 1 }]);
 
     const up = store.presignUpload(sessionId, "image/jpeg", 100, "a".repeat(64), "snapshot");
     store.verifyMedia(up.asset_id, false, "nope", false);
@@ -158,24 +172,45 @@ test("staff oauth csrf rbac exam roster session command media finding", async ()
     const metrics = await req(base, "/metrics");
     assert.match(metrics.raw, /phoneproctor_events_ingested_total/);
     assert.doesNotMatch(metrics.raw, /Ada|staff@example/);
+    const logoutDenied = await req(base, "/api/v1/auth/logout", { method: "POST", cookies });
+    assert.equal(logoutDenied.status, 403);
+    const logout = await req(base, "/api/v1/auth/logout", { method: "POST", cookies, headers: h });
+    assert.equal(logout.status, 200);
+    assert.equal((await req(base, "/api/v1/me", { cookies })).status, 401);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
 });
 
-test("cross-tenant exam access denied", () => {
+test("cross-tenant exam and console feed access denied", async () => {
   const store = new Store();
   const a = store.seedDev();
-  const orgB = store.createOrg("Other", "other");
+  const orgB = store.createOrg("Other", `other-${randomUUID()}`);
   const userB = store.upsertUser("b@x.com", "iss", "sub-b", "B");
   store.memberships.set(`${orgB.id}:${userB.id}`, { orgId: orgB.id, userId: userB.id });
   store.roles.push({ orgId: orgB.id, userId: userB.id, role: "exam_admin" });
   const sessA = store.createStaffSession(a.orgId, a.userId);
   const ctxA = store.lookupStaff(sessA.raw)!;
-  const exam = store.createExam(ctxA, "T", "t", {});
+  const exam = store.createExam(ctxA, `T-${randomUUID()}`, "t", {});
   const sessB = store.createStaffSession(orgB.id, userB.id);
-  const ctxB = store.lookupStaff(sessB.raw)!;
-  assert.throws(() => store.assertOrg(ctxB, exam.orgId));
+  const { server, base } = await listen(createApp(loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }), store));
+  try {
+    const cookies = `pp_session=${sessB.raw}`;
+    for (const route of [
+      `/api/v1/exams/${exam.id}/readiness`,
+      `/api/v1/exams/${exam.id}/sessions`,
+      `/api/v1/console/snapshot?exam_id=${exam.id}`,
+      `/api/v1/console/deltas?exam_id=${exam.id}&after_seq=0`,
+      `/api/v1/health/exams/${exam.id}`,
+    ]) {
+      assert.equal((await req(base, route, { cookies })).status, 403);
+    }
+    assert.equal((await req(base, `/api/v1/console/snapshot?exam_id=${exam.id}&cursor=-1`, {
+      cookies: `pp_session=${sessA.raw}`,
+    })).status, 400);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("oidc state replay and timeout", () => {
@@ -193,7 +228,7 @@ test("refresh replay revokes family", () => {
   const store = new Store();
   store.seedDev();
   const ctx = store.lookupStaff(store.createStaffSession([...store.orgs.keys()][0], [...store.users.keys()][0]).raw)!;
-  const exam = store.createExam(ctx, "C", "c", {});
+  const exam = store.createExam(ctx, `C-${randomUUID()}`, "c", {});
   store.importRoster(ctx, exam.id, [{ student_external_id: "1", display_name: "A" }]);
   const en = [...store.enrollments.values()][0];
   const tok = store.issueToken(ctx, en.id);
